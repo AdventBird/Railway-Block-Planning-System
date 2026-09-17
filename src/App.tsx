@@ -11,6 +11,8 @@ import Workspace from "./components/Workspace";
 import Simulation from "./components/Simulation";
 import ApprovalHistory, { type PlanStatus } from "./components/ApprovalHistory";
 import Assistant, { type AssistantScenario } from "./components/PlanningAssistant";
+import Landing from "./components/Landing";
+import { currentUser, signOut, type Officer } from "./auth";
 import { seedDecisions, type DecisionEntry } from "./data/planData";
 import { PLAN_VERSION } from "./data/opsData";
 import { CRIT, OK, PRIMARY, WARN, type ViewId } from "./components/ui";
@@ -57,7 +59,7 @@ export default function App() {
   const [planStatus, setPlanStatus] = useState<PlanStatus>("Pending approval");
   const [locked, setLocked] = useState(false);
   const [revisedNote, setRevisedNote] = useState<string | null>(null);
-  const [officer, setOfficer] = useState("Dy. Chief Controller");
+  const [officer, setOfficer] = useState<Officer | null>(() => currentUser());
   const [clock, setClock] = useState("");
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantScenario, setAssistantScenario] = useState<AssistantScenario>(null);
@@ -77,18 +79,7 @@ export default function App() {
     setView(v);
   };
 
-  // Signed-in officer from the legacy portal (localStorage bridge)
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("rbc_current_user");
-      if (raw) {
-        const u = JSON.parse(raw);
-        if (u.name) setOfficer(String(u.name));
-      }
-    } catch {
-      // keep default
-    }
-  }, []);
+  // Signed-in officer arrives from the Landing sign-in (localStorage-backed).
 
   // Live IST clock
   useEffect(() => {
@@ -100,6 +91,12 @@ export default function App() {
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Auth gate — landing / sign-in until an officer is signed in.
+  // (Placed before any dependent callbacks so `officer` is narrowed below.)
+  if (!officer) {
+    return <Landing onSignedIn={setOfficer} />;
+  }
 
   const handleAction = (action: "Approved" | "Modified" | "Rejected", reason: string) => {
     const version = action === "Modified" || revisedNote ? "v2026.09.15 · r4" : PLAN_VERSION;
@@ -113,7 +110,7 @@ export default function App() {
         : "NDLS–BSB night plan — 3 windows, 7 jobs",
       action,
       overrideReason: reason || undefined,
-      officer,
+      officer: officer.name,
     };
     setDecisions((prev) => [...prev, entry]);
     setPlanStatus(action);
@@ -128,6 +125,11 @@ export default function App() {
     setAssistantScenario(scenario);
     setAssistantOpen(true);
   };
+
+  // Auth gate — landing / sign-in until an officer is signed in.
+  if (!officer) {
+    return <Landing onSignedIn={setOfficer} />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f6f7fb] text-[#171a30]">
@@ -174,18 +176,16 @@ export default function App() {
         <div className="border-t border-[#eef0f6] px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[11px] font-bold text-[#171a30]">{officer}</div>
-              <div className="text-[9px] text-[#878da1]">Control Office · approving authority</div>
+              <div className="truncate text-[11px] font-bold text-[#171a30]">{officer.name}</div>
+              <div className="text-[9px] text-[#878da1]">{officer.role} · approving authority</div>
             </div>
             <button
               type="button"
               onClick={() => {
-                try {
-                  localStorage.removeItem("rbc_current_user");
-                } catch {}
-                window.location.href = "../../index.html";
+                signOut();
+                setOfficer(null);
               }}
-              title="Sign out to portal"
+              title="Sign out"
               className="focus-primary rounded p-1.5 text-[#878da1] transition-colors duration-200 hover:bg-[#fef2f2] hover:text-[#dc2626]"
             >
               <LogOut size={14} />
@@ -227,13 +227,6 @@ export default function App() {
               <MessagesSquare size={13} />
               Planning Assistant
             </button>
-            <a
-              href="../../index.html"
-              className="focus-primary hidden items-center rounded-lg border border-[#e3e6f0] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#4d5468] transition-colors duration-200 hover:bg-[#f5f6fc] sm:inline-flex"
-              title="Return to landing page"
-            >
-              Home
-            </a>
           </div>
         </header>
         {/* Main view */}
