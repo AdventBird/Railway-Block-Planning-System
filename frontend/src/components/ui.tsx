@@ -65,12 +65,12 @@ export function Button({
   type?: "button" | "submit";
 }) {
   const base =
-    "inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors duration-200 focus-primary disabled:cursor-not-allowed disabled:opacity-50";
+    "inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-all duration-150 ease-out focus-primary disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]";
   const styles: Record<string, string> = {
-    primary: "bg-[#2e3092] text-white hover:bg-[#24266f]",
-    secondary: "border border-[#d9ddef] bg-white text-[#171a30] hover:bg-[#eef0fa]",
+    primary: "bg-[#2e3092] text-white hover:bg-[#24266f] hover:shadow-sm active:bg-[#1f215e]",
+    secondary: "border border-[#d9ddef] bg-white text-[#171a30] hover:bg-[#eef0fa] hover:border-[#c4c9e2] hover:shadow-xs",
     ghost: "text-[#2e3092] hover:bg-[#eef0fa]",
-    danger: "border border-[#fecaca] bg-white text-[#dc2626] hover:bg-[#fef2f2]",
+    danger: "border border-[#fecaca] bg-white text-[#dc2626] hover:bg-[#fef2f2] hover:border-[#fca5a5]",
   };
   return (
     <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${styles[variant]} ${className}`}>
@@ -80,7 +80,31 @@ export function Button({
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-[#e3e6f0] bg-white ${className}`}>{children}</div>;
+  return <div className={`hover-lift rounded-xl border border-[#e3e6f0] bg-white transition-all duration-200 ease-out ${className}`}>{children}</div>;
+}
+
+export function Tooltip({ content, children }: { content: ReactNode; children: ReactNode }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+      onFocus={() => setVisible(true)}
+      onBlur={() => setVisible(false)}
+    >
+      {children}
+      {visible && (
+        <div
+          role="tooltip"
+          className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[#171a30]/80 bg-[#171a30] px-2 py-1 text-[10px] font-medium leading-tight text-white shadow-md animate-in fade-in zoom-in-95 duration-100"
+        >
+          {content}
+          <div className="absolute top-full left-1/2 -mt-1 -translate-x-1/2 border-4 border-transparent border-t-[#171a30]" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function SectionHeader({
@@ -116,7 +140,7 @@ export function Chip({
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 whitespace-nowrap rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider transition-transform duration-150 hover:scale-[1.02]"
       style={{ color, background: bg, border: `1px solid ${color}33` }}
     >
       {pulse && <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: color }} />}
@@ -130,7 +154,7 @@ export function TierChip({ tier, compact }: { tier: number; compact?: boolean })
   if (compact)
     return (
       <span
-        className="inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-extrabold"
+        className="inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-extrabold transition-transform duration-150 hover:scale-[1.04]"
         style={{ background: m.bg, color: m.color, border: `1px solid ${m.color}44` }}
         title={m.label}
       >
@@ -139,7 +163,7 @@ export function TierChip({ tier, compact }: { tier: number; compact?: boolean })
     );
   return (
     <span
-      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider"
+      className="inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider transition-transform duration-150 hover:scale-[1.02]"
       style={{ color: m.color, background: m.bg, border: `1px solid ${m.color}44` }}
     >
       <span className="rounded-sm px-1 font-mono" style={{ background: m.color, color: "#ffffff" }}>

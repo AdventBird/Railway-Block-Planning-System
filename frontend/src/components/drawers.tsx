@@ -3,11 +3,12 @@
 // anywhere → right-side drawer opens → close → back to the clean view.
 // ---------------------------------------------------------------------------
 import { Check, X } from "lucide-react";
-import { Drawer, Collapse, KV, Chip, TierChip, DeptChip, SourceChip, ReasonChip, CompatChip, PRIMARY, OK, CRIT, WARN, NEUTRAL } from "./ui";
+import { Drawer, Collapse, KV, Chip, TierChip, DeptChip, SourceChip, ReasonChip, CompatChip, REASON_META, PRIMARY, OK, CRIT, WARN, NEUTRAL } from "./ui";
 import type { ReactNode } from "react";
 import { jobById, jobOps, type Job, type CompatGroup } from "../data/jobsData";
-import { blockWindows, corridorLabel, existingBlocks, type Alert, type Train } from "../data/opsData";
+import { blockWindows, corridorLabel, existingBlocks, trains, type Alert } from "../data/opsData";
 import { recommendedPlan, conflictNext, weekDetail, type ConflictEntry } from "../data/planData";
+import type { AffectedTrain, DeferredJob } from "../api/planner";
 
 /* ------------------------------ window ref -------------------------------- */
 
@@ -108,7 +109,9 @@ export function JobDrawer({ job, onClose }: { job: Job; onClose: () => void }) {
 
 /* ------------------------------ train drawer ------------------------------ */
 
-export function TrainDrawer({ train, onClose }: { train: Train; onClose: () => void }) {
+export function TrainDrawer({ trainId, onClose }: { trainId: string; onClose: () => void }) {
+  const train = trains.find((t) => t.id === trainId);
+  if (!train) return null;
   const key = train.number.split("-")[0];
   const regulated = recommendedPlan.trainImpact.filter((t) => t.startsWith(key));
   const typeMeta =
@@ -419,6 +422,193 @@ export function ConflictDrawer({ entry, onClose }: { entry: ConflictEntry; onClo
           <p className="mt-1 leading-relaxed text-[#171a30]">{next ?? entry.remedy}</p>
         </div>
       </div>
+    </Drawer>
+  );
+}
+
+/* --------------------------- deferral reason drawer ------------------------ */
+// Feature 23 — "Why wasn't this scheduled?".
+// Every reason code, explanation and next-opportunity string is rendered
+// EXACTLY as the API layer returned it; only the constraint LABELS are looked
+// up from the shared REASON_META map. No reason text is written in React.
+
+export function ReasonDrawer({
+  deferral,
+  jobTitle,
+  attemptedWindow,
+  affectedTrains,
+  windowNote,
+  source,
+  onClose,
+}: {
+  deferral: DeferredJob;
+  /** Job title from the planner payload (optional). */
+  jobTitle?: string;
+  /** Window the job was aimed at — hidden when unknown. */
+  attemptedWindow?: string | null;
+  /** Corridor movements relevant to this deferral — hidden when empty. */
+  affectedTrains?: AffectedTrain[];
+  /** Window note from getWindowDetails() (optional). */
+  windowNote?: string;
+  /** Where the payload came from — a small hint, never an error. */
+  source?: string;
+  onClose: () => void;
+}) {
+  const codes = deferral.reasonCodes?.length ? deferral.reasonCodes : [deferral.code];
+  const labels = codes.map((code) => REASON_META[code]?.label ?? code);
+  const explanations = deferral.explanations;
+  const explanationRows: [string, string][] = explanations
+    ? ([
+        ["What happened", explanations.what],
+        ["What it means", explanations.means],
+        ["Recommended remedy", explanations.remedy],
+      ].filter(([, text]) => Boolean(text && text.trim())) as [string, string][])
+    : [];
+  const resources = deferral.resources ?? [];
+  const trainList = affectedTrains ?? [];
+  const hasContext = Boolean(attemptedWindow) || trainList.length > 0 || resources.length > 0;
+  const corridor = deferral.corridorId ? corridorLabel(deferral.corridorId) : undefined;
+
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      title={
+        <span className="truncate">
+          <span className="font-mono text-[#878da1]">{deferral.jobId}</span>
+          {jobTitle ? ` — ${jobTitle}` : ""}
+        </span>
+      }
+      subtitle="Why this job was not scheduled"
+      footer={
+        <p className="text-[10px] leading-relaxed text-[#878da1]">
+          Advisory only — deferrals are explained here, never authorized. Approval happens in Human
+          Approval.
+        </p>
+      }
+    >
+      {/* ------------------------------- header ------------------------------ */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {deferral.department && <DeptChip dept={deferral.department} />}
+        {deferral.tier !== undefined && <TierChip tier={deferral.tier} />}
+        <Chip label="Not scheduled" color={WARN} bg="#fffbeb" />
+        {corridor && <Chip label={corridor} color={NEUTRAL} bg="#f1f3f9" />}
+      </div>
+
+      <div className="mb-3 rounded-lg border border-[#e3e6f0] px-3 py-1">
+        {deferral.minutes !== undefined && <KV k="Work duration" v={`${deferral.minutes} min`} />}
+        {deferral.status && <KV k="Status" v={deferral.status} />}
+        {source && <KV k="Plan source" v={source} />}
+      </div>
+
+      {/* -------------------------- binding constraints ---------------------- */}
+      <div className="mb-3">
+        <div className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
+          Binding constraints
+        </div>
+        {codes.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {codes.map((code) => (
+              <ReasonChip key={code} code={code} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-[11px] italic text-[#878da1]">
+            No constraint code was reported by the planner.
+          </p>
+        )}
+        {labels.length > 0 && (
+          <p className="mt-1.5 text-[11px] leading-relaxed text-[#4d5468]">{labels.join(" · ")}</p>
+        )}
+      </div>
+
+      {/* ------------------------ operational explanation -------------------- */}
+      <div className="mb-3 space-y-2">
+        <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
+          Operational explanation
+        </div>
+        {deferral.reason ? (
+          <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-3 py-2">
+            <p className="leading-relaxed text-[#171a30]">{deferral.reason}</p>
+          </div>
+        ) : null}
+        {explanationRows.map(([label, text]) => (
+          <div key={label} className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
+            <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">
+              {label}
+            </div>
+            <p className="mt-1 leading-relaxed text-[#171a30]">{text}</p>
+          </div>
+        ))}
+        {!deferral.reason && explanationRows.length === 0 && (
+          <p className="text-[11px] italic text-[#878da1]">
+            The planner returned no explanation for this deferral.
+          </p>
+        )}
+      </div>
+
+      {/* --------------------------- operational context --------------------- */}
+      {hasContext && (
+        <div className="mb-3">
+          <div className="mb-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
+            Operational context
+          </div>
+          <div className="rounded-lg border border-[#e3e6f0] px-3 py-1">
+            {attemptedWindow && <KV k="Affected window" v={attemptedWindow} />}
+            {windowNote && <KV k="Window note" v={windowNote} />}
+          </div>
+          {trainList.length > 0 && (
+            <div className="mt-2">
+              <Collapse
+                title={`Affected train${trainList.length > 1 ? "s" : ""} (${trainList.length})`}
+              >
+                <ul className="space-y-1">
+                  {trainList.map((train) => (
+                    <li key={train.id} className="flex gap-2">
+                      <span className="text-[#a2a7ba]">·</span>
+                      <span className="min-w-0">
+                        <span className="font-mono font-bold text-[#2e3092]">{train.number}</span>{" "}
+                        {train.name}
+                        <span className="ml-1 text-[#878da1]">
+                          {train.start}–{train.end} · {train.type}
+                        </span>
+                        {train.note ? (
+                          <span className="block text-[#878da1]">{train.note}</span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Collapse>
+            </div>
+          )}
+          {resources.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">
+                Resource
+              </span>
+              {resources.map((resource) => (
+                <span
+                  key={resource}
+                  className="rounded-full border border-[#e3e6f0] bg-[#f5f6fc] px-2 py-0.5 font-mono text-[10px] text-[#4d5468]"
+                >
+                  {resource}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ----------------------------- next opportunity ---------------------- */}
+      {deferral.nextFeasibleWindow && (
+        <div className="rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#16a34a]">
+            Next opportunity
+          </div>
+          <p className="mt-1 leading-relaxed text-[#171a30]">{deferral.nextFeasibleWindow}</p>
+        </div>
+      )}
     </Drawer>
   );
 }

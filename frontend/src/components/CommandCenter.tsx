@@ -186,7 +186,7 @@ function CommandCenter({ onNavigate, approvalPending, onOpenAssistant }: Command
       </div>
 
       {alert && <AlertDrawer alert={alert} onClose={() => setAlert(null)} />}
-      {train && <TrainDrawer train={train} onClose={() => setTrain(null)} />}
+      {train && <TrainDrawer trainId={train.id} onClose={() => setTrain(null)} />}
       {win && <WindowDrawer win={win} onClose={() => setWin(null)} />}
     </div>
   );

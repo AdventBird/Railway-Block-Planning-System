@@ -4,13 +4,16 @@
 // REJECT + lock). Bottom: recent decisions audit trail.
 // The officer is the only authority — nothing here is automatic.
 // ---------------------------------------------------------------------------
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, Chip, Drawer, SectionHeader, Button, CRIT, NEUTRAL, OK, PRIMARY } from "./ui";
 import { blockWindows, PLAN_DATE, PLAN_VERSION, PLAN_VERSION_NEXT } from "../data/opsData";
 import { decisionAudit, recommendedPlan, type DecisionEntry } from "../data/planData";
 import { jobById } from "../data/jobsData";
 import { planStats } from "../lib/plan";
 import { UtilBar } from "./TimelineUtil";
+import { getPlannerResult } from "../api/planner";
+import type { PlannerResult } from "../api/types";
+import { PlanningQualityDashboard, buildQualityMetricsFromPlan } from "./PlannerKpiCard";
 
 export type PlanStatus = "Pending approval" | "Approved" | "Modified" | "Rejected" | "Locked";
 
@@ -168,6 +171,22 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
   const [reason, setReason] = useState("");
   const [auditId, setAuditId] = useState<string | null>(null);
 
+  const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getPlannerResult().then((res) => {
+      if (active) setPlannerResult(res);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const qualityMetrics = useMemo(() => {
+    return buildQualityMetricsFromPlan(plannerResult);
+  }, [plannerResult]);
+
   const stats = useMemo(
     () => planStats(blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })), recommendedPlan.assignments),
     []
@@ -226,6 +245,20 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
         </span>
         <span className="ml-auto font-mono text-[10px] text-[#878da1]">{PLAN_DATE}</span>
       </Card>
+
+      {/* Planning Quality Dashboard (Phase 6) */}
+      <div className="mb-3">
+        <PlanningQualityDashboard
+          metrics={qualityMetrics}
+          title="Plan Quality Assessment"
+          plannerStatus={qualityMetrics.plannerStatus ?? "Optimal"}
+          sourceHint={
+            plannerResult?.source.status === "live"
+              ? "FastAPI Solver · Real-time Operational Telemetry"
+              : "Authority Review · Recommended Plan r3 Evaluation"
+          }
+        />
+      </div>
 
       {/* Officer decision */}
       <Card className={`p-4 ${locked ? "opacity-90" : "border-[#2e3092]/50"}`}>

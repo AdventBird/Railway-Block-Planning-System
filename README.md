@@ -1,76 +1,141 @@
 # Railway Block Planning System
 
-**AI-Powered Intelligent Railway Block Planning & Maintenance Coordination** — a
-**frontend-only prototype** (synthetic data, no backend / LLM / optimizer — all outputs are
-simulated) built around the real operational workflow:
+> **Intelligent Railway Block Planning, Evaluation, and Maintenance Optimization System**
 
-**OBSERVE → PLAN → SIMULATE → APPROVE**
+A professional full-stack platform built around the real operational workflow:
 
-The officer is always the final decision-maker: drafts, simulations and the assistant are
-advisory; only **Human Approval** authorizes a block.
+$$\text{OBSERVE} \longrightarrow \text{PLAN} \longrightarrow \text{SIMULATE} \longrightarrow \text{APPROVE}$$
 
-This folder is the whole project — landing, sign-in and the React application included.
+The railway officer is always the final authority: drafts, algorithmic evaluations, simulations, and the planning assistant are advisory; only **Human Approval** authorizes an operational block.
 
-## Run
+---
 
-```bash
-npm install
+## 🏗️ Repository Architecture
 
-# development (app opens directly, no sign-in gate):
-npm run dev          # → http://localhost:5173
+The project is structured as an industry-standard full-stack monorepo:
 
-# production demo (landing → sign-in → app):
-npm run build        # type-check (strict) + production build into dist/
-node serve.mjs       # → http://localhost:5252  (PORT env overrides)
+```
+Railway-Block-Planning-System/
+├── frontend/                     # React + TypeScript + Vite SPA
+│   ├── src/
+│   │   ├── api/                  # API client & planner service (backend-ready)
+│   │   ├── components/           # UI components, diagrams, drawers, panels
+│   │   ├── data/                 # Operational seed datasets & types
+│   │   ├── lib/                  # Derived planning arithmetic
+│   │   ├── App.tsx               # Root application router/layout
+│   │   ├── auth.ts               # Authentication state & roles
+│   │   ├── index.css             # Design system & custom animations
+│   │   ├── main.tsx              # DOM entry point
+│   │   └── types.ts              # Core shared TypeScript declarations
+│   ├── index.html                # Vite HTML template
+│   ├── package.json              # Frontend dependencies and scripts
+│   ├── tsconfig.json             # TypeScript configuration
+│   ├── vite.config.ts            # Vite bundler configuration
+│   └── serve.mjs                 # Production/preview static server
+│
+├── backend/                      # Python Core Planning & Optimization Engine
+│   ├── app/
+│   │   ├── services/             # Optimization, Evaluation, Replanning, Fairness, etc.
+│   │   ├── tests/                # 92 unit tests covering all planning algorithms
+│   │   ├── api.py                # REST API router & zero-dependency HTTP server
+│   │   └── __init__.py
+│   ├── __init__.py
+│   ├── requirements.txt          # Python dependencies
+│   └── pytest.ini                # Pytest configuration
+│
+├── .github/                      # CI/CD Workflows
+│   └── workflows/
+│       └── ci.yml                # Automated CI: backend tests + frontend build
+│
+├── .gitignore                    # Comprehensive ignore rules
+├── package.json                  # Root monorepo orchestration
+└── README.md                     # Project documentation
 ```
 
-Sign in with the demo account **admin@railways.gov.in / admin123** (or create an account —
-prototype credentials stay in the browser only).
+---
 
-## Screens (5 views, hash-routed)
+## 🚀 Quick Start
+
+### Prerequisites
+- **Node.js** (v18 or higher) & **npm**
+- **Python** (v3.10 or higher)
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/AdventBird/Railway-Block-Planning-System.git
+cd Railway-Block-Planning-System
+
+# Install frontend dependencies
+npm run dev --prefix frontend  # or cd frontend && npm install
+
+# Install backend dependencies
+pip install -r backend/requirements.txt
+```
+
+---
+
+## 💻 Running the Application
+
+### 1. Frontend Development Server
+From the root directory:
+```bash
+npm run dev
+# or
+npm run dev:frontend
+# → Opens at http://localhost:5173
+```
+
+### 2. Backend Planning Server
+From the root directory:
+```bash
+npm run dev:backend
+# or
+python -m backend.app.api
+# → Runs on http://127.0.0.1:8000
+```
+
+### 3. Production Build & Preview
+```bash
+npm run build
+npm run preview
+```
+
+---
+
+## 🧪 Testing
+
+### Backend Unit Tests (Pytest)
+Run the complete test suite (92 unit tests covering the evaluation engine, replanning, multi-criteria optimizer, fairness metrics, buffer algorithms, and API endpoints):
+```bash
+npm run test:backend
+# or
+python -m pytest backend/app/tests
+```
+
+### Full Monorepo Validation
+```bash
+npm test
+```
+
+---
+
+## 🖥️ Operational Views
 
 | Group | View | Purpose |
 | --- | --- | --- |
-| Operations | **Command Center** | "What needs my attention right now" — 5 KPIs, attention list, tonight's plan strip, simulated data-source status |
-| Operations | **Network** | Interactive NDLS–BSB schematic (14 sections, UP/DOWN lanes, search, filters, progressive-disclosure section panel) |
-| Planning | **Planning Workspace** | Three-zone screen: work to schedule · railway timeline · recommended block plan. Compatibility, conflicts, deferred jobs and unused capacity live here; Tonight / Week / Month switch |
-| Planning | **Simulation** | Reserve / change a window (relief train, emergency, reduce/remove window, priority change, restriction) → BEFORE → EVENT → AFTER with reasoning |
-| Governance | **Approval & History** | Approve / Modify / Reject + lock, with the audit trail below |
+| **Operations** | **Command Center** | "What needs my attention right now" — 5 KPIs, attention list, tonight's plan strip, simulated data-source status |
+| **Operations** | **Network** | Interactive NDLS–BSB schematic (14 sections, UP/DOWN lanes, search, filters, progressive-disclosure section panel) |
+| **Planning** | **Planning Workspace** | Three-zone screen: work to schedule · railway timeline · recommended block plan. Compatibility, conflicts, deferred jobs and unused capacity; Tonight / Week / Month switch |
+| **Planning** | **Simulation** | Reserve / change a window (relief train, emergency, reduce/remove window, priority change, restriction) → BEFORE → EVENT → AFTER with reasoning |
+| **Governance** | **Approval & History** | Approve / Modify / Reject + lock, with full audit trail |
 
-The **Planning Assistant** (top-right button on every screen) understands natural-language
-requests such as *"Reserve NDLS–GZB from 02:30–03:30 for a relief train and reorganize
-tonight's maintenance"* — it prepares a structured scenario and hands it to the Simulation,
-never authorizing anything itself.
+---
 
-## Single fictional world
+## ⚙️ Core Principles
 
-All screens share one dataset: the **NDLS–BSB trunk (NCR)** with 5 operational corridors
-(NDLS–GZB, TDL–CNB, PRYJ–DDU, GZB–ALJN, DDU–BSB), a unified TMS/SMMS/TDMS/BDMS job feed
-with the **Tier 0–4 priority rulebook** (no numeric scores), and computed plan metrics
-(blocks · jobs · utilization · unused capacity — derived in `src/lib/plan.ts`, never
-hand-maintained).
-
-## Architecture
-
-```
-index.html                 Vite entry (landing + auth live inside the React app)
-serve.mjs                  zero-dependency static server for the production demo
-src/auth.ts                prototype sign-in / register / sign-out (localStorage)
-src/lib/plan.ts            derived planning arithmetic (single source of truth)
-src/data/                  opsData · jobsData · planData · mockRailwayData
-src/components/            App shell · Landing (+auth) · CommandCenter · Workspace
-                           · Timeline · Simulation · ApprovalHistory · PlanningAssistant
-                           · NetworkDiagram + TrackEdge/StationNode/StatusLegend
-                           · ui.tsx primitives · drawers.tsx (shared detail drawers)
-dist/                      production build (served by serve.mjs)
-```
-
-## Key principles baked in
-
-- Priority is exclusively **Tier 0–4** — no confidence percentages, no numeric scores.
-- Compatibility is decided by **work method, isolation and resources** — same corridor ≠ compatible.
-- The assistant and every plan are **advisory**; only **Human Approval** authorizes a block.
-- Every deferral carries a plain-language reason (insufficient window, train/resource/isolation
-  conflict, incompatible maintenance, higher-priority work).
-- Every screen practices progressive disclosure: decision-relevant summary by default,
-  details in right-side drawers on click.
+- **Tier 0–4 Priority Rulebook**: Strict operational prioritization without ambiguous confidence percentages or arbitrary scoring.
+- **Resource & Method Compatibility**: Compatibility is determined by work method, electrical isolation, track access, and machinery. Same corridor $\neq$ automatically compatible.
+- **Human-in-the-Loop Governance**: The algorithmic planner and natural-language planning assistant are advisory; only explicit officer approval can commit blocks.
+- **Explainable Deferrals**: Every deferred maintenance task carries clear operational reason codes (e.g. insufficient window, train conflict, isolation clash, crew limit).
