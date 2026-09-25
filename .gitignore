@@ -1,7 +1,9 @@
 # Dependencies
 node_modules/
+Railway-Block-Planning-System-master/
 .pnp
 .pnp.js
+
 
 # Production / Build Output
 dist/
