@@ -1,34 +1,17 @@
 // ---------------------------------------------------------------------------
-// PLANNER API SERVICE (frontend-only, backend-ready)
+// PLANNER SERVICE — Planning Workspace → real backend (POST /api/planner/run).
 // ---------------------------------------------------------------------------
-// This is the ONLY module in the app allowed to call fetch(). The UI never
-// talks to a backend directly: every screen keeps reading the same shapes it
-// reads today, so FastAPI (Person 1 / Person 3) can be wired later WITHOUT
-// touching any Workspace component.
-//
-// Guarantees:
-//   • backend first, synthetic data as automatic fallback;
-//   • never throws — every failure resolves to a typed synthetic payload;
-//   • no uncaught promise errors and no console spam (at most one warning
-//     per endpoint per session);
-//   • the synthetic dataset is NOT duplicated — it is consumed from the
-//     existing exports of src/data/opsData.ts, jobsData.ts and planData.ts,
-//     and all arithmetic comes from src/lib/plan.ts (read-only).
-//
-// Backend endpoints this layer is ready for (none required today):
-//   GET /api/planner        → PlannerResult
-//   GET /api/deferred       → DeferredJob[]
-//   GET /api/windows/:id    → WindowDetails
-//
-// Configure the base URL with VITE_PLANNER_API_URL, or at runtime with
-// setPlannerBaseUrl("http://127.0.0.1:8000"). With no base URL configured the
-// service resolves to synthetic data immediately and never performs I/O.
+// All transport goes through ./client (§34). Behaviour:
+//   • backend first: the plan shown in the Workspace IS the CP-SAT result;
+//   • graceful fallback: when the backend is unreachable the seeded synthetic
+//     dataset is used and the source banner says so — never a silent fake;
+//   • every assignment / deferred row / metric rendered by the UI comes from
+//     the payload normalised here.
 // ---------------------------------------------------------------------------
 
 import {
   blockWindows,
   corridorLabel,
-  corridors,
   existingBlocks,
   PLAN_DATE,
   PLAN_VERSION,
@@ -44,114 +27,41 @@ import {
   type ReasonCode,
 } from "../data/planData";
 import { planStats, spanMinutes } from "../lib/plan";
+import { ENDPOINTS, ApiError, apiPost, isBackendConfigured } from "./client";
 import type {
   DeferredJob,
+  PlannerApiStatus,
   PlannerAssignment,
   PlannerMetrics,
   PlannerResult,
   PlannerSource,
+  PlannerStatus,
   PlannerWindowStatus,
+  ReplanEvent,
+  ReplanResult,
   WindowDetails,
 } from "./types";
 
 /* -------------------------------------------------------------------------- */
-/* Configuration                                                              */
+/* Source bookkeeping                                                         */
 /* -------------------------------------------------------------------------- */
-
-const ENV_BASE_URL: string =
-  typeof import.meta !== "undefined" &&
-  typeof import.meta.env === "object" &&
-  typeof (import.meta.env as Record<string, unknown>).VITE_PLANNER_API_URL === "string"
-    ? ((import.meta.env as Record<string, unknown>).VITE_PLANNER_API_URL as string)
-    : "";
-
-const REQUEST_TIMEOUT_MS = 6000;
-
-/** Endpoints this service may call — kept here so the UI never builds URLs. */
-export const PLANNER_ENDPOINTS = {
-  result: "/api/planner",
-  deferred: "/api/deferred",
-  window: (windowId: string): string => `/api/windows/${encodeURIComponent(windowId)}`,
-} as const;
-
-let baseUrlCache: string | null = null;
-
-/** Resolve the configured backend base URL (empty string ⇒ synthetic only). */
-export function plannerBaseUrl(): string {
-  const configured = baseUrlCache ?? ENV_BASE_URL;
-  return configured.trim().replace(/\/+$/, "");
-}
-
-/** Runtime override — lets a later integration point inject a backend host. */
-export function setPlannerBaseUrl(baseUrl: string | null): void {
-  baseUrlCache = baseUrl ?? "";
-}
-
-/** True once a backend base URL is configured. */
-export function isPlannerBackendConfigured(): boolean {
-  return plannerBaseUrl().length > 0;
-}
 
 const syntheticSource = (message: string): PlannerSource => ({ status: "fallback", message });
 
 const SYNTHETIC_SOURCE: PlannerSource = syntheticSource(
-  "Synthetic planning dataset (no backend configured)."
-);
-const FALLBACK_SOURCE: PlannerSource = syntheticSource(
-  "Planner backend unavailable — synthetic dataset in use."
+  "Synthetic planning dataset (backend not reachable)."
 );
 
-/* -------------------------------------------------------------------------- */
-/* Transport — the only fetch() in the application                            */
-/* -------------------------------------------------------------------------- */
+/** Last transport outcome — the UI may render a banner from it. */
+let lastSource: PlannerSource = { status: "unknown" };
 
-/** One warning per endpoint per session, so a dead backend never spams. */
-const warnedEndpoints = new Set<string>();
-
-function warnOnce(endpoint: string, reason: string): void {
-  if (warnedEndpoints.has(endpoint)) return;
-  warnedEndpoints.add(endpoint);
-  if (typeof console !== "undefined" && typeof console.warn === "function") {
-    console.warn(`[planner] ${endpoint} unavailable (${reason}) — using synthetic data.`);
-  }
+export function getPlannerApiStatus(): PlannerSource {
+  return lastSource;
 }
 
-/** Returns `null` for every failure: offline, 404, non-2xx, timeout, bad JSON. */
-async function fetchJson<T>(endpoint: string): Promise<T | null> {
-  const base = plannerBaseUrl();
-  if (!base || typeof fetch !== "function") return null;
-
-  const controller = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
-
-  try {
-    const response = await fetch(`${base}${endpoint}`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller ? controller.signal : undefined,
-    });
-    if (!response || !response.ok) {
-      warnOnce(endpoint, response ? `HTTP ${response.status}` : "no response");
-      return null;
-    }
-    return (await response.json()) as T;
-  } catch (error) {
-    warnOnce(endpoint, error instanceof Error ? error.name : "network error");
-    return null;
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-}
-
-/**
- * Minimal shape validation. A backend may return a subset of the contract,
- * but the two arrays the plan is built from must actually be arrays.
- */
-function isPlannerResultPayload(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as { assignments?: unknown; deferred?: unknown };
-  if (!Array.isArray(candidate.assignments)) return false;
-  return candidate.deferred === undefined || Array.isArray(candidate.deferred);
+function setSource(status: PlannerApiStatus, endpoint?: string, message?: string): PlannerSource {
+  lastSource = { status, endpoint, message };
+  return lastSource;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -167,6 +77,14 @@ const pickText = (record: UnknownRecord, ...keys: string[]): string | undefined 
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+};
+
+const pickNumber = (record: UnknownRecord, ...keys: string[]): number | undefined => {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
   }
   return undefined;
 };
@@ -199,10 +117,7 @@ const pickReasonCodes = (record: UnknownRecord): ReasonCode[] | undefined => {
   return typeof raw === "string" ? [raw as ReasonCode] : undefined;
 };
 
-/**
- * Accepts backend snake_case (`job_id`) or the existing camelCase, and drops
- * rows that cannot be placed in the plan at all.
- */
+/** Accepts backend snake_case (`job_id`) or camelCase; drops unplaceable rows. */
 function normalizeAssignments(payload: unknown): PlannerAssignment[] {
   if (!Array.isArray(payload)) return [];
   const out: PlannerAssignment[] = [];
@@ -218,8 +133,11 @@ function normalizeAssignments(payload: unknown): PlannerAssignment[] {
       windowId,
       start,
       end,
+      startMinutes: pickNumber(record, "start_minutes", "startMinutes"),
+      endMinutes: pickNumber(record, "end_minutes", "endMinutes"),
       parallel: pickBoolean(record, "parallel"),
       note: pickText(record, "note"),
+      possessionMinutes: pickNumber(record, "possession_minutes", "possessionMinutes"),
     });
   }
   return out;
@@ -238,14 +156,25 @@ function normalizeDeferredJobs(payload: unknown): DeferredJob[] {
       code: codes?.[0] ?? "LOWER_PRIORITY",
       reason: pickText(record, "reason", "explanation") ?? "Deferred by the planner.",
       reasonCodes: codes,
+      blockingConstraints: pickStringList(record, "blocking_constraints", "blockingConstraints"),
     });
   }
   return out;
 }
 
+/** INFEASIBLE diagnostics travel on the planner payload. */
+function normalizeInfeasible(record: UnknownRecord, result: PlannerResult): void {
+  result.status = (pickText(record, "status") as PlannerStatus | undefined) ?? result.status;
+  const blocking = pickStringList(record, "blocking_constraints", "blockingConstraints");
+  if (blocking?.length) result.blockingConstraints = blocking;
+  const codes = pickReasonCodes(record);
+  if (codes?.length) result.reasonCodes = codes;
+  const affected = pickStringList(record, "affected_jobs", "affectedJobs");
+  if (affected?.length) result.affectedJobs = affected;
+}
 
 /* -------------------------------------------------------------------------- */
-/* Enrichment — add job context that either source can resolve                */
+/* Enrichment — job context from the seeded catalogue (display only)          */
 /* -------------------------------------------------------------------------- */
 
 const seedAssignmentContext = (
@@ -295,7 +224,7 @@ function enrichDeferred(list: DeferredJob[]): DeferredJob[] {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Derived metrics (arithmetic comes from lib/plan.ts — read-only)            */
+/* Derived metrics (same arithmetic for backend + synthetic plans)            */
 /* -------------------------------------------------------------------------- */
 
 function tierCoverage(): Record<string, number> {
@@ -307,7 +236,7 @@ function tierCoverage(): Record<string, number> {
   return coverage;
 }
 
-/** Plan-level metrics for any assignment set (synthetic or backend). */
+/** Plan-level metrics for any assignment set (backend or synthetic). */
 function deriveMetrics(scheduled: PlanAssignment[], deferredCount: number): PlannerMetrics {
   const stats = planStats(
     blockWindows.map((window) => ({ id: window.id, minutes: window.minutes })),
@@ -326,6 +255,16 @@ function deriveMetrics(scheduled: PlanAssignment[], deferredCount: number): Plan
     horizonFit: jobs.length ? Math.round((maintained.size / jobs.length) * 100) : 0,
   };
 }
+
+const toPlanAssignments = (list: PlannerAssignment[]): PlanAssignment[] =>
+  list.map((assignment) => ({
+    jobId: assignment.jobId,
+    windowId: assignment.windowId,
+    start: assignment.start,
+    end: assignment.end,
+    parallel: assignment.parallel,
+    note: assignment.note,
+  }));
 
 /** The window a deferred job belongs to, if the plan places the job at all. */
 function windowIdOfJob(jobId: string, scheduled: PlanAssignment[]): string | undefined {
@@ -352,8 +291,7 @@ function seedDeferred(): DeferredJob[] {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Synthetic builders — the fallback path (reuses existing exports, never     */
-/* re-declares the dataset)                                                   */
+/* Synthetic builders — the fallback path (reuses existing seed exports)      */
 /* -------------------------------------------------------------------------- */
 
 /** Build the synthetic planner result directly from the seed modules. */
@@ -366,6 +304,7 @@ export function buildSyntheticPlannerResult(
   return {
     version: recommendedPlan.version,
     date: recommendedPlan.date,
+    status: "FEASIBLE",
     assignments: enrichAssignments(scheduled),
     deferred: enrichDeferred(seedDeferred()),
     trainImpact: [...recommendedPlan.trainImpact],
@@ -431,141 +370,173 @@ export function buildSyntheticWindowDetails(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Public service — the three entry points the UI will later consume           */
+/* Public service — backend first, synthetic fallback, never throws           */
 /* -------------------------------------------------------------------------- */
 
-const toPlanAssignments = (list: PlannerAssignment[]): PlanAssignment[] =>
-  list.map((assignment) => ({
-    jobId: assignment.jobId,
-    windowId: assignment.windowId,
-    start: assignment.start,
-    end: assignment.end,
-    parallel: assignment.parallel,
-    note: assignment.note,
-  }));
+function isPlannerPayload(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { assignments?: unknown; status?: unknown };
+  return Array.isArray(candidate.assignments) && typeof candidate.status === "string";
+}
 
 /**
  * getPlannerResult()
- * Backend first (GET /api/planner), else the synthetic recommended plan.
- * Never rejects and never throws.
+ * Runs the REAL CP-SAT planner (POST /api/planner/run). When the backend is
+ * unreachable, resolves to the synthetic plan with a fallback source marker.
+ * Never rejects — the UI decides how to render `source`.
  */
 export async function getPlannerResult(): Promise<PlannerResult> {
-  const endpoint = PLANNER_ENDPOINTS.result;
-  try {
-    const payload = await fetchJson<unknown>(endpoint);
-    if (payload !== null && isPlannerResultPayload(payload)) {
-      const record = asRecord(payload);
-      const assignments = normalizeAssignments(record.assignments);
-      const deferred = enrichDeferred(normalizeDeferredJobs(record.deferred));
-      return {
-        version: pickText(record, "version") ?? PLAN_VERSION,
-        date: pickText(record, "date") ?? PLAN_DATE,
-        assignments: enrichAssignments(assignments),
-        deferred,
-        trainImpact:
-          pickStringList(record, "trainImpact", "train_impact", "affectedTrain") ??
-          [...recommendedPlan.trainImpact],
-        resources: pickStringList(record, "resources") ?? [...recommendedPlan.resources],
-        metrics: deriveMetrics(toPlanAssignments(assignments), deferred.length),
-        source: { status: "live", endpoint },
-      };
+  const endpoint = ENDPOINTS.plannerRun;
+  if (isBackendConfigured()) {
+    try {
+      const payload = await apiPost<unknown>(endpoint, { mode: "BALANCED" });
+      if (isPlannerPayload(payload)) {
+        const record = asRecord(payload);
+        const assignments = normalizeAssignments(record.assignments);
+        const deferred = enrichDeferred(normalizeDeferredJobs(record.deferred_jobs ?? record.deferred));
+        const result: PlannerResult = {
+          version: pickText(record, "plan_version", "version") ?? PLAN_VERSION,
+          date: PLAN_DATE,
+          status: (pickText(record, "status") as PlannerStatus | undefined) ?? "FEASIBLE",
+          assignments: enrichAssignments(assignments),
+          deferred,
+          trainImpact:
+            pickStringList(record, "train_impact", "trainImpact") ?? [],
+          resources: pickStringList(record, "resources") ?? [],
+          metrics: deriveMetrics(toPlanAssignments(assignments), deferred.length),
+          source: setSource("live", endpoint),
+        };
+        if (result.status === "INFEASIBLE") normalizeInfeasible(record, result);
+        // Backend metric pass-through (interval-union arithmetic owned there).
+        const metricsRecord = asRecord(record.metrics);
+        if (metricsRecord["occupied_minutes"] !== undefined) {
+          result.metrics = {
+            ...result.metrics,
+            occupiedMinutes: pickNumber(metricsRecord, "occupied_minutes"),
+            blocks: pickNumber(metricsRecord, "blocks"),
+            scheduled: pickNumber(metricsRecord, "scheduled"),
+            deferred: pickNumber(metricsRecord, "deferred"),
+            utilization: pickNumber(metricsRecord, "utilization"),
+          };
+        }
+        return result;
+      }
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? `Backend planner unavailable — synthetic dataset in use. (${error.code})`
+          : "Backend planner unavailable — synthetic dataset in use.";
+      setSource("fallback", endpoint, message);
+      return buildSyntheticPlannerResult({ status: "fallback", endpoint, message });
     }
-  } catch (error) {
-    // Defensive: fetchJson already swallows failures — never let the UI break.
-    warnOnce(endpoint, error instanceof Error ? error.name : "unexpected error");
   }
-  return buildSyntheticPlannerResult(
-    isPlannerBackendConfigured() ? FALLBACK_SOURCE : SYNTHETIC_SOURCE
-  );
+  const message = isBackendConfigured()
+    ? "Backend planner unavailable — synthetic dataset in use."
+    : "No backend configured — synthetic dataset in use.";
+  setSource("fallback", endpoint, message);
+  return buildSyntheticPlannerResult({ status: "fallback", endpoint, message });
 }
 
 /**
  * getDeferredJobs()
- * Backend first (GET /api/deferred), then the planner result, then synthetic.
- * Rows are always enriched with title / tier / explanation so a "Why?" panel
- * works identically for backend and synthetic data.
+ * Derived from the planner result (backend-owned reason codes); falls back to
+ * the seeded explanation rows only when the backend is unreachable.
  */
 export async function getDeferredJobs(): Promise<DeferredJob[]> {
-  const endpoint = PLANNER_ENDPOINTS.deferred;
-  try {
-    const payload = await fetchJson<unknown>(endpoint);
-    if (payload !== null) {
-      const rows = Array.isArray(payload)
-        ? normalizeDeferredJobs(payload)
-        : normalizeDeferredJobs(asRecord(payload).deferred);
-      // 200 with an empty list is a valid answer — report it as-is.
-      if (rows.length) return enrichDeferred(rows);
-      if (Array.isArray(payload)) return [];
-    }
-  } catch (error) {
-    warnOnce(endpoint, error instanceof Error ? error.name : "unexpected error");
-  }
-  try {
-    const result = await getPlannerResult();
-    return result.deferred;
-  } catch {
-    return enrichDeferred(seedDeferred());
-  }
+  const result = await getPlannerResult();
+  if (result.source.status === "live") return result.deferred;
+  return enrichDeferred(seedDeferred());
 }
-
 
 /**
  * getWindowDetails(windowId)
- * Backend first (GET /api/windows/:id), else the synthetic window/block record.
- * Accepts proposed windows (W1…W3) and sanctioned blocks (E1…E3).
- * An empty id resolves to the synthetic default and performs no I/O.
+ * Window detail is derived from the real plan (assignments in that window)
+ * when the backend is live; synthetic detail otherwise.
  */
 export async function getWindowDetails(windowId: string): Promise<WindowDetails> {
   const id = windowId.trim();
-  if (!id) return buildSyntheticWindowDetails("W1");
+  const result = await getPlannerResult();
+  const source = result.source;
 
-  const endpoint = PLANNER_ENDPOINTS.window(id);
-  try {
-    const payload = await fetchJson<unknown>(endpoint);
-    if (payload !== null && typeof payload === "object") {
-      const record = asRecord(payload);
-      const resolvedId = pickText(record, "windowId", "window_id", "id") ?? id;
-      const base = buildSyntheticWindowDetails(resolvedId); // corridor/minutes skeleton
-      const assignments = normalizeAssignments(record.assignments);
-      const deferred = enrichDeferred(normalizeDeferredJobs(record.deferred));
+  const base =
+    source.status === "live"
+      ? buildSyntheticWindowDetails(id, { status: "live" })
+      : buildSyntheticWindowDetails(id, source);
+
+  if (!id) return base;
+
+  if (source.status === "live") {
+    const rawAssignments = result.assignments.filter((a) => a.windowId === id);
+    if (rawAssignments.length) {
+      const departments = [
+        ...new Set(rawAssignments.map((a) => a.department ?? "").filter(Boolean)),
+      ];
+      const resources = [...new Set(rawAssignments.flatMap((a) => a.resources ?? []))];
+      const corridorId =
+        corridorOfWindow(id) ?? rawAssignments[0].corridorId ?? base.corridorId;
       return {
         ...base,
-        windowId: resolvedId,
-        start: pickText(record, "start", "start_time") ?? base.start,
-        end: pickText(record, "end", "end_time") ?? base.end,
-        status: (pickText(record, "status") as PlannerWindowStatus | undefined) ?? base.status,
-        note: pickText(record, "note") ?? base.note,
-        work: pickText(record, "work") ?? base.work,
-        jobCount: assignments.length || base.jobCount,
-        assignments: assignments.length ? enrichAssignments(assignments) : base.assignments,
-        deferred: deferred.length ? deferred : base.deferred,
-        departments: pickStringList(record, "departments") ?? base.departments,
-        resources: pickStringList(record, "resources") ?? base.resources,
-        affectedTrain:
-          pickStringList(record, "affectedTrain", "train_impact", "affected_train") ??
-          base.affectedTrain,
-        metrics: deriveMetrics(toPlanAssignments(assignments), deferred.length),
-        source: { status: "live", endpoint },
+        windowId: id,
+        corridorId,
+        corridorLabel: corridorLabel(corridorId),
+        jobCount: rawAssignments.length,
+        assignments: enrichAssignments(rawAssignments),
+        deferred: result.deferred.filter((entry) => entry.corridorId === corridorId),
+        departments,
+        resources,
+        jobsAffected: rawAssignments.map((assignment) => assignment.jobId),
+        metrics: deriveMetrics(toPlanAssignments(rawAssignments), result.deferred.length),
+        source,
       };
     }
-  } catch (error) {
-    warnOnce(endpoint, error instanceof Error ? error.name : "unexpected error");
   }
-  return buildSyntheticWindowDetails(id);
+  return base;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Small read-only helpers for the future UI integration layer                */
+/* Replanning (simulation → backend)                                          */
 /* -------------------------------------------------------------------------- */
 
-/** Latest transport status — optional source of a "synthetic data" banner. */
-export function getPlannerApiStatus(): PlannerSource {
-  return isPlannerBackendConfigured()
-    ? { status: "fallback", endpoint: PLANNER_ENDPOINTS.result, message: FALLBACK_SOURCE.message }
-    : SYNTHETIC_SOURCE;
+/**
+ * runReplan()
+ * POST /api/replan — the simulation screen shows BEFORE (current plan) /
+ * EVENT / AFTER (real CP-SAT replan). Throws ApiError; the caller renders it.
+ */
+export async function runReplan(
+  event: ReplanEvent,
+  currentPlan?: Record<string, unknown>,
+  lockedAssignments?: Record<string, string>
+): Promise<ReplanResult> {
+  const payload = await apiPost<unknown>(ENDPOINTS.replan, {
+    event,
+    current_plan: currentPlan,
+    locked_assignments: lockedAssignments ?? {},
+  });
+  const record = asRecord(payload);
+  return {
+    status: (pickText(record, "status") as PlannerStatus) ?? "FEASIBLE",
+    plan_version: pickText(record, "plan_version") ?? "r2",
+    trigger: pickText(record, "trigger") ?? event.type,
+    changed_assignments: normalizeAssignments(record.changed_assignments),
+    unchanged_assignments: normalizeAssignments(record.unchanged_assignments),
+    newly_deferred_jobs: normalizeDeferredJobs(record.newly_deferred_jobs),
+    newly_scheduled_jobs: normalizeAssignments(record.newly_scheduled_jobs),
+    assignments: normalizeAssignments(record.assignments),
+    deferred_jobs: normalizeDeferredJobs(record.deferred_jobs),
+    metrics: asRecord(record.metrics) as PlannerMetrics,
+    train_impacts: pickStringList(record, "train_impacts", "trainImpacts") ?? [],
+    reason_codes: (pickReasonCodes(record) ?? []) as ReplanResult["reason_codes"],
+    timestamp: pickText(record, "timestamp") ?? new Date().toISOString(),
+  };
 }
 
-/** Window a job is scheduled in, if the plan places it at all. */
+/* -------------------------------------------------------------------------- */
+/* Small read-only helpers kept for the existing UI imports                   */
+/* -------------------------------------------------------------------------- */
+
+export type { DeferredJob, PlannerAssignment, WindowDetails } from "./types";
+
+/** Window a job is scheduled in per the seed plan (synthetic fallback view). */
 export function scheduledWindowOf(jobId: string): string | undefined {
   return windowIdOfJob(jobId, recommendedPlan.assignments);
 }
@@ -577,7 +548,17 @@ export function corridorOfPlannerWindow(windowId: string): string | undefined {
 
 /** Corridor catalogue, so the UI never has to import opsData for filter options. */
 export function plannerCorridors(): { id: string; label: string; line: string }[] {
-  return corridors.map((corridor) => ({ ...corridor }));
+  const corridors: { id: string; label: string; line: string }[] = [];
+  for (const window of blockWindows) {
+    if (!corridors.some((c) => c.id === window.corridorId)) {
+      corridors.push({
+        id: window.corridorId,
+        label: corridorLabel(window.corridorId),
+        line: "UP",
+      });
+    }
+  }
+  return corridors;
 }
 
 /** Total proposed window minutes — one number the future dashboard reads. */
@@ -586,7 +567,7 @@ export function totalProposedWindowMinutes(): number {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Feature 23 — deferral explanation support ("Why wasn't this scheduled?")    */
+/* Feature 23 — deferral explanation support ("Why wasn't this scheduled?")   */
 /* -------------------------------------------------------------------------- */
 
 /** A train movement that shares the corridor/window of a deferred job. */
@@ -599,9 +580,6 @@ export interface AffectedTrain {
   end: string;
   note?: string;
 }
-
-/** Re-exported so the UI can type deferrals/assignments/windows from the API layer alone. */
-export type { DeferredJob, PlannerAssignment, WindowDetails };
 
 /**
  * Minutes of a job inside [start, end) on a circular 24 h clock — local copy of
@@ -673,3 +651,5 @@ export function affectedTrainsOf(
     }));
 }
 
+/** Re-export so screens can import the status type from one module. */
+export type { PlannerApiStatus } from "./types";

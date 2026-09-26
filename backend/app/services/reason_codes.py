@@ -1,33 +1,25 @@
-"""Centralized Reason Code Registry for Railway Block Planning.
+"""Backward-compatibility re-export of the canonical reason-code registry.
 
-Standardizes all deferral and infeasibility diagnostic reason codes used
-across the optimization subsystem and UI explanation panels.
+The SINGLE source of truth is ``backend.app.rules.reasons``. This module
+exists only so older imports (``services.reason_codes``) keep working while
+the codebase consolidates. Do not add new codes here.
 """
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Dict, List, Set
+from backend.app.rules.reasons import (  # noqa: F401
+    CODE_ORDER,
+    REASON_DESCRIPTIONS,
+    ReasonCode,
+    UnscheduledResult,
+    reason_code_catalogue,
+    sort_codes,
+)
 
+# ---------------------------------------------------------------------------
+# Flat constants (legacy ergonomic imports)
+# ---------------------------------------------------------------------------
 
-class ReasonCode(str, Enum):
-    """Canonical reason codes explaining why maintenance work was deferred or infeasible."""
-
-    NO_FEASIBLE_WINDOW = "NO_FEASIBLE_WINDOW"
-    TRAIN_CONFLICT = "TRAIN_CONFLICT"
-    RESOURCE_CONFLICT = "RESOURCE_CONFLICT"
-    ISOLATION_CONFLICT = "ISOLATION_CONFLICT"
-    BLOCK_CAPACITY = "BLOCK_CAPACITY"
-    INCOMPATIBLE_WORK = "INCOMPATIBLE_WORK"
-    SECTION_RESTRICTION = "SECTION_RESTRICTION"
-    LOCKED_ASSIGNMENT = "LOCKED_ASSIGNMENT"
-    LOWER_PRIORITY = "LOWER_PRIORITY"
-
-    # Backward compatibility alias
-    INSUFFICIENT_WINDOW = "INSUFFICIENT_WINDOW"
-
-
-# Re-export individual constants for ergonomic imports
 NO_FEASIBLE_WINDOW: str = ReasonCode.NO_FEASIBLE_WINDOW.value
 TRAIN_CONFLICT: str = ReasonCode.TRAIN_CONFLICT.value
 RESOURCE_CONFLICT: str = ReasonCode.RESOURCE_CONFLICT.value
@@ -37,32 +29,18 @@ INCOMPATIBLE_WORK: str = ReasonCode.INCOMPATIBLE_WORK.value
 SECTION_RESTRICTION: str = ReasonCode.SECTION_RESTRICTION.value
 LOCKED_ASSIGNMENT: str = ReasonCode.LOCKED_ASSIGNMENT.value
 LOWER_PRIORITY: str = ReasonCode.LOWER_PRIORITY.value
+PROTECTED_MOVEMENT_CONFLICT: str = ReasonCode.PROTECTED_MOVEMENT_CONFLICT.value
 
-# Backward compatibility constant
+# Backward compatibility alias
 INSUFFICIENT_WINDOW: str = ReasonCode.INSUFFICIENT_WINDOW.value
 
-# Descriptions for human-readable metadata
-REASON_DESCRIPTIONS: Dict[str, str] = {
-    NO_FEASIBLE_WINDOW: "No safe or accessible possession window exists on the target corridor.",
-    TRAIN_CONFLICT: "Protected train movements occupy the corridor and prevent scheduling.",
-    RESOURCE_CONFLICT: "Required specialized machinery, crews, or tower wagons are unavailable or booked.",
-    ISOLATION_CONFLICT: "OHE traction power isolation requirements conflict with the window electrical status.",
-    BLOCK_CAPACITY: "Available window duration is insufficient for the protected work duration.",
-    INCOMPATIBLE_WORK: "Simultaneous possession execution violates safety separation or work method rules.",
-    SECTION_RESTRICTION: "Line configuration or single-line operation restrictions prevent concurrent possession.",
-    LOCKED_ASSIGNMENT: "Pre-sanctioned or locked block assignments prevent rescheduling.",
-    LOWER_PRIORITY: "Corridor capacity was allocated to higher-tier emergency or safety-critical maintenance.",
-    INSUFFICIENT_WINDOW: "Available window duration is insufficient for the protected work duration.",
+#: Descriptions keyed by plain string (legacy shape).
+DESCRIPTIONS: dict = {
+    code.value if hasattr(code, "value") else code: description
+    for code, description in REASON_DESCRIPTIONS.items()
 }
 
-CANONICAL_REASON_CODES: List[str] = [
-    NO_FEASIBLE_WINDOW,
-    TRAIN_CONFLICT,
-    RESOURCE_CONFLICT,
-    ISOLATION_CONFLICT,
-    BLOCK_CAPACITY,
-    INCOMPATIBLE_WORK,
-    SECTION_RESTRICTION,
-    LOCKED_ASSIGNMENT,
-    LOWER_PRIORITY,
-]
+#: Legacy alias kept for old callers.
+REASON_DESCRIPTIONS_BY_STRING = DESCRIPTIONS
+
+CANONICAL_REASON_CODES: list = [code.value for code in ReasonCode]

@@ -1,0 +1,239 @@
+{
+  "$comment": "Canonical network reference data: corridors, physical sections (with line configuration) and shared resources. Corridor ids C1-C5 mirror the frontend schematic.",
+  "corridors": [
+    {
+      "corridor_id": "C1",
+      "label": "NDLS-GZB (UP)",
+      "origin_station": "NDLS",
+      "destination_station": "GZB",
+      "line_configuration": "DOUBLE"
+    },
+    {
+      "corridor_id": "C2",
+      "label": "TDL-CNB (DOWN)",
+      "origin_station": "TDL",
+      "destination_station": "CNB",
+      "line_configuration": "DOUBLE"
+    },
+    {
+      "corridor_id": "C3",
+      "label": "PRYJ-DDU (UP)",
+      "origin_station": "PRYJ",
+      "destination_station": "DDU",
+      "line_configuration": "DOUBLE"
+    },
+    {
+      "corridor_id": "C4",
+      "label": "GZB-ALJN (DOWN)",
+      "origin_station": "GZB",
+      "destination_station": "ALJN",
+      "line_configuration": "DOUBLE"
+    },
+    {
+      "corridor_id": "C5",
+      "label": "DDU-BSB (Single)",
+      "origin_station": "DDU",
+      "destination_station": "BSB",
+      "line_configuration": "SINGLE"
+    },
+    {
+      "corridor_id": "C6",
+      "label": "CNB-LKO (Single)",
+      "origin_station": "CNB",
+      "destination_station": "LKO",
+      "line_configuration": "SINGLE"
+    }
+  ],
+  "sections": [
+    {
+      "section_id": "SEC-NDLS-GZB-UP",
+      "name": "New Delhi-Ghaziabad UP Line",
+      "corridor_id": "C1",
+      "from_station_id": "NDLS",
+      "to_station_id": "GZB",
+      "line_configuration": "DOUBLE",
+      "lines": ["UP", "DOWN"],
+      "operational_status": "clear"
+    },
+    {
+      "section_id": "SEC-NDLS-GZB-DN",
+      "name": "New Delhi-Ghaziabad DOWN Line",
+      "corridor_id": "C1",
+      "from_station_id": "NDLS",
+      "to_station_id": "GZB",
+      "line_configuration": "DOUBLE",
+      "lines": ["UP", "DOWN"],
+      "operational_status": "clear"
+    },
+    {
+      "section_id": "SEC-ALJN-TDL",
+      "name": "Aligarh-Tundla Section",
+      "corridor_id": "C4",
+      "from_station_id": "ALJN",
+      "to_station_id": "TDL",
+      "line_configuration": "SINGLE",
+      "lines": ["BOTH"],
+      "operational_status": "caution"
+    },
+    {
+      "section_id": "SEC-TDL-CNB-UP",
+      "name": "Tundla-Kanpur UP Line",
+      "corridor_id": "C2",
+      "from_station_id": "TDL",
+      "to_station_id": "CNB",
+      "line_configuration": "DOUBLE",
+      "lines": ["UP", "DOWN"],
+      "operational_status": "clear"
+    },
+    {
+      "section_id": "SEC-TDL-CNB-DN",
+      "name": "Tundla-Kanpur DOWN Line",
+      "corridor_id": "C2",
+      "from_station_id": "TDL",
+      "to_station_id": "CNB",
+      "line_configuration": "DOUBLE",
+      "lines": ["UP", "DOWN"],
+      "operational_status": "maintenance"
+    },
+    {
+      "section_id": "SEC-PRYJ-DDU-UP",
+      "name": "Prayagraj-DDU UP Line",
+      "corridor_id": "C3",
+      "from_station_id": "PRYJ",
+      "to_station_id": "DDU",
+      "line_configuration": "DOUBLE",
+      "lines": ["UP", "DOWN"],
+      "operational_status": "clear"
+    },
+    {
+      "section_id": "SEC-DDU-BSB",
+      "name": "DDU-Varanasi Section",
+      "corridor_id": "C5",
+      "from_station_id": "DDU",
+      "to_station_id": "BSB",
+      "line_configuration": "SINGLE",
+      "lines": ["BOTH"],
+      "operational_status": "blocked"
+    },
+    {
+      "section_id": "SEC-CNB-LKO",
+      "name": "Kanpur-Lucknow Section",
+      "corridor_id": "C6",
+      "from_station_id": "CNB",
+      "to_station_id": "LKO",
+      "line_configuration": "SINGLE",
+      "lines": ["BOTH"],
+      "operational_status": "clear"
+    }
+  ],
+  "resources": [
+    {
+      "resource_id": "RES-BCM03",
+      "name": "BCM-03 ballast cleaning machine",
+      "resource_type": "MACHINE",
+      "department": "Engineering",
+      "availability_note": "Rostered 14-15 Sep; POH from 25 Sep",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-25T00:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-TW925",
+      "name": "Tower wagon TW-925",
+      "resource_type": "MACHINE",
+      "department": "TRD",
+      "availability_note": "Committed 15 & 18 Sep (OHE work)",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-30T00:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-REMM2",
+      "name": "REMM-2 welding set",
+      "resource_type": "MACHINE",
+      "department": "Engineering",
+      "availability_note": "Committed to W1 tonight",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-30T00:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-TCP",
+      "name": "TCP tamping machine",
+      "resource_type": "MACHINE",
+      "department": "Engineering",
+      "availability_note": "POH until 17 Sep",
+      "available_from": "2026-09-17T00:00:00+05:30",
+      "available_until": "2026-09-30T00:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-REMM-CRANE",
+      "name": "REMM access crane",
+      "resource_type": "MACHINE",
+      "department": "Engineering",
+      "availability_note": "Committed to the TDL-CNB possession; back 17 Sep",
+      "available_from": "2026-09-17T00:00:00+05:30",
+      "available_until": "2026-09-30T00:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-OHE-CREW-A",
+      "name": "OHE crew A",
+      "resource_type": "CREW",
+      "department": "TRD",
+      "availability_note": "Night shift 22:00-08:00",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-15T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-OHE-CREW-B",
+      "name": "OHE crew B",
+      "resource_type": "CREW",
+      "department": "TRD",
+      "availability_note": "Night shift 22:00-08:00",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-15T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-ST-LAMP",
+      "name": "S&T lamp party",
+      "resource_type": "PARTY",
+      "department": "S&T",
+      "availability_note": "Night shift 22:00-08:00",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-15T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-ST-FAILURE",
+      "name": "S&T failure team",
+      "resource_type": "PARTY",
+      "department": "S&T",
+      "availability_note": "On standby at Tundla",
+      "available_from": "2026-09-14T18:00:00+05:30",
+      "available_until": "2026-09-15T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-PWAY-WELD",
+      "name": "P-Way welding party",
+      "resource_type": "PARTY",
+      "department": "Engineering",
+      "availability_note": "Night shift 22:00-08:00",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-15T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-ST-EERC",
+      "name": "S&T EERC team",
+      "resource_type": "PARTY",
+      "department": "S&T",
+      "availability_note": "Rostered 14-16 Sep",
+      "available_from": "2026-09-14T22:00:00+05:30",
+      "available_until": "2026-09-16T08:00:00+05:30"
+    },
+    {
+      "resource_id": "RES-UNKNOWN",
+      "name": "Unregistered machine (validation exercise)",
+      "resource_type": "MACHINE",
+      "department": "SHARED",
+      "availability_note": "Not present in the resource register",
+      "available_from": null,
+      "available_until": null
+    }
+  ]
+}

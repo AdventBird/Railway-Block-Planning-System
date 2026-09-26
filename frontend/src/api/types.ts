@@ -1,17 +1,15 @@
 // ---------------------------------------------------------------------------
-// Planner API contract — the shapes the Planning Workspace consumes.
+// Planner API contract — the shapes the backend serves and the UI consumes.
 // ---------------------------------------------------------------------------
-// These types are deliberately backend-ready: every field the future planner
-// API may serve is present, and anything only the synthetic dataset can answer
-// today is OPTIONAL so a real response may omit it.
+// One shared type module (§34): every API-facing interface lives here and is
+// derived from the canonical backend responses.
 //
 // Rules kept from the Phase 1 audit:
 //   • no AI / confidence score fields — priority is Tier 0–4 only;
 //   • project terminology only (tier, reason code, corridor, window, block);
 //   • both snake_case (backend payload convention, e.g. `job_id`) and the
 //     camelCase used by the existing data files are accepted — the service
-//     normalises either form before it reaches the UI;
-//   • nothing here is imported by the UI yet — this is an additive seam.
+//     normalises either form before it reaches the UI.
 // ---------------------------------------------------------------------------
 
 import type { ReasonCode } from "../data/planData";
@@ -33,6 +31,15 @@ export type PlannerWindowStatus =
   | "rejected"
   | "locked";
 
+/** Solver verdict, reported honestly (§29). */
+export type PlannerStatus =
+  | "OPTIMAL"
+  | "FEASIBLE"
+  | "HEURISTIC"
+  | "INFEASIBLE"
+  | "MODEL_INVALID"
+  | "UNKNOWN";
+
 /* -------------------------------------------------------------------------- */
 /* Response status                                                            */
 /* -------------------------------------------------------------------------- */
@@ -42,14 +49,13 @@ export type PlannerWindowStatus =
  *   "live"     → served by a backend this call;
  *   "fallback" → backend absent / unreachable / invalid → synthetic data used;
  *   "unknown"  → before the first call resolves.
- * The UI can render a banner from `message` without knowing transport details.
  */
 export type PlannerApiStatus = "live" | "fallback" | "unknown";
 
 /** Where a resolved payload actually came from. */
 export interface PlannerSource {
   status: PlannerApiStatus;
-  /** Endpoint that was attempted, e.g. "/api/planner". */
+  /** Endpoint that was attempted, e.g. "/api/planner/run". */
   endpoint?: string;
   /** Plain-language reason the fallback was used (safe to show an officer). */
   message?: string;
@@ -59,16 +65,20 @@ export interface PlannerSource {
 /* Assignments & deferrals                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** One job placed inside a window (or an already-sanctioned block). */
+/** One job placed inside a block window with its actual scheduled interval. */
 export interface PlannerAssignment {
-  /** e.g. "J-02" — backend may send `job_id`. */
   jobId: string;
-  /** e.g. "W1" … "E3" — backend may send `window_id`. */
   windowId: string;
+  /** HH:MM display form (backend formats from the continuous timeline). */
   start: string;
   end: string;
+  /** Continuous-timeline minutes (cross-midnight safe) when available. */
+  startMinutes?: number;
+  endMinutes?: number;
   parallel?: boolean;
   note?: string;
+  /** Possession minutes (setup + work + restore). */
+  possessionMinutes?: number;
   /* ---------------- context added by the frontend service ---------------- */
   title?: string;
   department?: PlannerDepartment | string;
@@ -79,11 +89,11 @@ export interface PlannerAssignment {
   resources?: string[];
 }
 
-/** A job the planner could not place, with a plain-language cause. */
+/** A job the planner could not place, with backend-owned reason codes. */
 export interface DeferredJob {
   jobId: string;
   code: ReasonCode;
-  /** Human-readable deferral explanation. */
+  /** Human-readable deferral explanation (from the backend). */
   reason: string;
   /* ---------------- context added by the frontend service ---------------- */
   title?: string;
@@ -94,6 +104,8 @@ export interface DeferredJob {
   resources?: string[];
   /** Backend may return one or many codes for the same job. */
   reasonCodes?: ReasonCode[];
+  /** Structured blocking constraints (backend diagnostics). */
+  blockingConstraints?: string[];
   /** Structured explanation (what / what it means / next opportunity). */
   explanations?: { what?: string; means?: string; remedy?: string };
   /** Next feasible window, e.g. "Thu 17 Sep — REMM crane returns from POH". */
@@ -138,20 +150,16 @@ export interface WindowDetails {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Metrics (future-ready)                                                     */
+/* Metrics (backend-computed; synthetic fallback fills the same fields)       */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Derived plan arithmetic. The synthetic fallback fills every field from
- * `lib/plan.ts`; a backend may return a subset, so most fields are optional.
- */
 export interface PlannerMetrics {
   /** Windows in use by ≥1 assignment. */
   blocks?: number;
   jobs?: number;
   /** Total minutes of all proposed windows. */
   windowMinutes?: number;
-  /** Union of occupied minutes (overlaps counted once). */
+  /** Union of occupied minutes (overlaps counted once — interval union). */
   occupiedMinutes?: number;
   unusedMinutes?: number;
   /** Occupied minutes ÷ total window minutes, 0–100. */
@@ -159,14 +167,15 @@ export interface PlannerMetrics {
   deferredCount?: number;
   /** Job count per tier, e.g. { 0: 1, 1: 2, 2: 2, 3: 1, 4: 2 }. */
   tierCoverage?: Record<string, number>;
-  /* -------------------------- backend may add later ---------------------- */
-  plannedBlocks?: number;
-  plannedMinutes?: number;
-  /** Percentage of jobs held inside the maintenance horizon. */
+  /* -------------------------- backend may add ---------------------------- */
+  scheduled?: number;
+  deferred?: number;
+  possessionsUsed?: number;
+  baselinePossessions?: number;
+  possessionsSaved?: number;
+  bundledJobs?: number;
+  departmentsIntegrated?: string[];
   horizonFit?: number;
-  projectedUtilization?: number;
-  utilizationTrend?: number[];
-  assetAvailability?: { name: string; avail: number; note: string }[];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -177,6 +186,8 @@ export interface PlannerMetrics {
 export interface PlannerResult {
   version?: string;
   date?: string;
+  /** Solver verdict from the backend (OPTIMAL/FEASIBLE/INFEASIBLE/…). */
+  status?: PlannerStatus;
   assignments: PlannerAssignment[];
   deferred: DeferredJob[];
   affectedTrain?: string[];
@@ -184,4 +195,80 @@ export interface PlannerResult {
   resources?: string[];
   metrics?: PlannerMetrics;
   source: PlannerSource;
+  /** INFEASIBLE diagnostics when the solver proved no schedule exists. */
+  blockingConstraints?: string[];
+  reasonCodes?: ReasonCode[];
+  affectedJobs?: string[];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Simulation / replanning                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** The operational events the backend replanner understands (§24). */
+export type ReplanEventType =
+  | "SPECIAL_TRAIN"
+  | "TRAIN_CANCELLED"
+  | "RESOURCE_FAILURE"
+  | "EMERGENCY_JOB"
+  | "WINDOW_REDUCED"
+  | "WINDOW_WITHDRAWN"
+  | "PRIORITY_CHANGE"
+  | "OPERATIONAL_RESTRICTION";
+
+export interface ReplanEvent {
+  type: ReplanEventType;
+  payload: Record<string, unknown>;
+}
+
+export interface ReplanResult {
+  status: PlannerStatus;
+  plan_version: string;
+  trigger: string;
+  changed_assignments: PlannerAssignment[];
+  unchanged_assignments: PlannerAssignment[];
+  newly_deferred_jobs: DeferredJob[];
+  newly_scheduled_jobs: PlannerAssignment[];
+  assignments: PlannerAssignment[];
+  deferred_jobs: DeferredJob[];
+  metrics: PlannerMetrics;
+  train_impacts: string[];
+  reason_codes: ReasonCode[];
+  timestamp: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Governance                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** Backend approval lifecycle (§36). */
+export type GovernanceStatus =
+  | "DRAFT"
+  | "PENDING_APPROVAL"
+  | "APPROVED"
+  | "MODIFIED"
+  | "REJECTED"
+  | "LOCKED"
+  | "STALE"
+  | "INFEASIBLE";
+
+export interface AuditEntry {
+  entry_id: number;
+  plan_id: string;
+  plan_version: string;
+  timestamp: string;
+  officer: string;
+  action: string;
+  reason: string;
+  affected_jobs: string[];
+  event_trigger?: string | null;
+}
+
+export interface GovernedPlan {
+  plan_id: string;
+  plan_version: string;
+  status: GovernanceStatus;
+  created_at: string;
+  updated_at: string;
+  plan: Record<string, unknown>;
 }

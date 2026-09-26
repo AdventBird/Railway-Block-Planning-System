@@ -76,6 +76,7 @@ class Planner:
         train_movements: Optional[Sequence[Dict[str, Any]]] = None,
         locked_assignments: Optional[Dict[str, str]] = None,
         supported_departments: Optional[List[str]] = None,
+        failed_resources: Optional[List[str]] = None,
     ) -> PlannerResult:
         """Run end-to-end planning optimization.
 
@@ -106,10 +107,15 @@ class Planner:
             train_movements=train_movements,
             locked_assignments=locked_assignments,
             department_fairness=fairness_summary,
+            failed_resources=failed_resources,
         )
 
+        # A locked assignment that can no longer be honoured is a hard
+        # failure: report INFEASIBLE honestly, never silently move the lock.
+        locked_conflicts = list(getattr(solution, "locked_conflicts", []) or [])
+
         # Handle INFEASIBLE gracefully
-        if solution.status == "INFEASIBLE":
+        if solution.status == "INFEASIBLE" or (locked_conflicts and solution.status in ("OPTIMAL", "FEASIBLE")):
             infeas_diag = DiagnosticsEngine.build_infeasible_result(
                 jobs=ranked_jobs,
                 candidate_windows=windows,
@@ -118,6 +124,13 @@ class Planner:
                 compat_groups=compat_groups,
                 plan_version=self.plan_version,
             )
+            if locked_conflicts:
+                infeas_diag["blocking_constraints"] = list(
+                    dict.fromkeys(locked_conflicts + list(infeas_diag.get("blocking_constraints", [])))
+                )
+                infeas_diag["reason_codes"] = sorted(
+                    set(infeas_diag.get("reason_codes", [])) | {"LOCKED_ASSIGNMENT_CONFLICT"}
+                )
             deferred_entries = []
             for j_id in job_map:
                 diag = DiagnosticsEngine.diagnose_job(
@@ -130,8 +143,15 @@ class Planner:
                 )
                 entry = diag.to_dict()
                 entry["jobId"] = j_id
-                entry["code"] = diag.reason_codes[0] if diag.reason_codes else "NO_FEASIBLE_WINDOW"
-                entry["reason"] = diag.explanation
+                if j_id in (locked_assignments or {}) and locked_conflicts:
+                    # The locked job is the one that cannot be honoured.
+                    entry["code"] = "LOCKED_ASSIGNMENT_CONFLICT"
+                    if not any("LOCKED_ASSIGNMENT" in c for c in diag.reason_codes):
+                        entry["reason_codes"] = ["LOCKED_ASSIGNMENT_CONFLICT"] + list(diag.reason_codes)
+                        entry["reason"] = "; ".join(locked_conflicts)
+                else:
+                    entry["code"] = diag.reason_codes[0] if diag.reason_codes else "NO_FEASIBLE_WINDOW"
+                entry["reason"] = entry.get("reason") or diag.explanation
                 deferred_entries.append(entry)
 
             return PlannerResult(
@@ -150,6 +170,7 @@ class Planner:
 
         # 4. Diagnose Deferred Jobs
         deferred_entries = []
+        failed_set = {r.lower() for r in (failed_resources or [])}
         for def_id in solution.deferred_job_ids:
             if def_id in job_map:
                 diag = DiagnosticsEngine.diagnose_job(
@@ -160,6 +181,18 @@ class Planner:
                     train_movements=train_movements,
                     locked_assignments=locked_assignments,
                 )
+                # A failed resource is reported as RESOURCE_CONFLICT directly
+                # from the event, not inferred.
+                j_res = {
+                    str(r).strip().lower()
+                    for r in (PriorityEngine._extract_field(job_map[def_id], "resources", default=[]) or [])
+                }
+                if failed_set & j_res and "RESOURCE_CONFLICT" not in diag.reason_codes:
+                    diag.reason_codes = ["RESOURCE_CONFLICT"] + list(diag.reason_codes)
+                    diag.blocking_constraints = [
+                        f"Required resource failed and is unavailable: "
+                        f"{', '.join(sorted(failed_set & j_res))}."
+                    ] + list(diag.blocking_constraints)
                 primary_code = diag.reason_codes[0] if diag.reason_codes else "LOWER_PRIORITY"
                 deferred_entries.append({
                     "jobId": def_id,
@@ -203,17 +236,31 @@ class Planner:
 
         total_window_mins = sum(int(w.get("minutes") or 0) for w in windows)
 
-        # Occupied minutes from assigned jobs
-        occupied_mins = 0
+        # Occupied minutes use interval-union per window (Feature 30): two
+        # 60-min jobs in parallel occupy ~60 min of possession, never 120.
+        from collections import defaultdict
+
+        from backend.app.services.timeline import union_minutes
+
+        by_window: Dict[str, List] = defaultdict(list)
         job_map = {
             str(PriorityEngine._extract_field(j, "id", "job_id", "jobId", default="")): j
             for j in jobs
         }
         for a in assignments:
-            j_id = str(a.get("jobId") or a.get("job_id") or "")
-            if j_id in job_map:
-                duration = int(PriorityEngine._extract_field(job_map[j_id], "duration_minutes", "minutes", default=0))
-                occupied_mins += duration
+            wid = str(a.get("windowId") or a.get("window_id") or "")
+            s = a.get("start_minutes")
+            e = a.get("end_minutes")
+            if s is None or e is None:
+                # Fall back to job duration only when the interval is missing.
+                j_id = str(a.get("jobId") or a.get("job_id") or "")
+                if j_id in job_map:
+                    duration = int(PriorityEngine._extract_field(job_map[j_id], "duration_minutes", "minutes", default=0))
+                    s, e = 0, duration
+                else:
+                    s, e = 0, 0
+            by_window[wid].append((int(s), int(e)))
+        occupied_mins = sum(union_minutes(intervals) for intervals in by_window.values())
 
         utilization = round((occupied_mins / total_window_mins * 100.0), 1) if total_window_mins > 0 else 0.0
 

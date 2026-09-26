@@ -6,8 +6,10 @@
 import type { CSSProperties } from "react";
 import { blockWindows, corridors, existingBlocks, trains } from "../data/opsData";
 import { jobById } from "../data/jobsData";
+import { seedWindowOfBackendId } from "../data/idMap";
 import { recommendedPlan } from "../data/planData";
 import { spanMinutes } from "../lib/plan";
+import type { PlannerAssignment } from "../api/types";
 
 const SPAN = 10 * 60; // 22:00 → 08:00
 export const HOURS = Array.from({ length: 11 }, (_, i) => `${String((22 + i) % 24).padStart(2, "0")}:00`);
@@ -39,15 +41,44 @@ export interface TimelineLane {
   bars: TimelineBar[];
 }
 
-const CORRIDOR_OF_WINDOW: Record<string, string> = { W1: "C1", W2: "C2", W3: "C3", E1: "C4", E2: "C2", E3: "C5" };
+/**
+ * Corridor owning a window id — resolved without guesswork:
+ *   1. seeded proposed window (W1…W3) or sanctioned block (E1…E3);
+ *   2. a backend canonical block id (`BLK-2026-…`) via the documented id map;
+ *   3. the assignment's own enriched corridor id (backend-enriched rows).
+ * Returns `undefined` when unresolvable — such job bars are simply not drawn.
+ */
+export function corridorOfWindowId(
+  windowId: string,
+  assignment?: PlannerAssignment
+): string | undefined {
+  const id = String(windowId ?? "").trim();
+  const proposed = blockWindows.find((w) => w.id === id);
+  if (proposed) return proposed.corridorId;
+  const sanctioned = existingBlocks.find((b) => b.id === id || b.blockId === id);
+  if (sanctioned) return sanctioned.corridorId;
+  const seedId = seedWindowOfBackendId(id);
+  if (seedId) {
+    const seedWin =
+      blockWindows.find((w) => w.id === seedId) ?? existingBlocks.find((b) => b.id === seedId);
+    if (seedWin) return seedWin.corridorId;
+  }
+  return assignment?.corridorId;
+}
 
 const startPct = (t: string): number => (((spanMinutes("22:00", t)) / SPAN) * 100);
 const widthPct = (s: string, e: string): number => (spanMinutes(s, e) / SPAN) * 100;
 
-/** Full planning-night lanes: windows + trains + existing blocks + plan jobs. */
-export function buildPlanLanes(): TimelineLane[] {
+/**
+ * Full planning-night lanes: windows + trains + existing blocks + plan jobs.
+ * `assignments` defaults to the seeded plan; callers pass the live planner
+ * result so the timeline always mirrors what the backend actually scheduled.
+ */
+export function buildPlanLanes(
+  assignments: PlannerAssignment[] = recommendedPlan.assignments
+): TimelineLane[] {
   const jobCount: Record<string, number> = {};
-  recommendedPlan.assignments.forEach((a) => {
+  assignments.forEach((a) => {
     jobCount[a.windowId] = (jobCount[a.windowId] ?? 0) + 1;
   });
 
@@ -91,13 +122,13 @@ export function buildPlanLanes(): TimelineLane[] {
           winId: b.id,
         })
       );
-    recommendedPlan.assignments.forEach((a) => {
-      if (CORRIDOR_OF_WINDOW[a.windowId] !== c.id) return;
+    assignments.forEach((a) => {
+      if (corridorOfWindowId(a.windowId, a) !== c.id) return;
       const job = jobById(a.jobId);
       bars.push({
         key: `job-${a.jobId}`,
         kind: "job",
-        label: `${a.jobId} ${job?.title.split(/[—(]/)[0].trim() ?? ""}`,
+        label: job ? `${a.jobId} ${job.title.split(/[—(]/)[0].trim()}` : a.jobId,
         sub: a.parallel ? "parallel" : undefined,
         start: a.start,
         end: a.end,

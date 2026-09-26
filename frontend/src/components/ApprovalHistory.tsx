@@ -4,7 +4,7 @@
 // REJECT + lock). Bottom: recent decisions audit trail.
 // The officer is the only authority — nothing here is automatic.
 // ---------------------------------------------------------------------------
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Chip, Drawer, SectionHeader, Button, CRIT, NEUTRAL, OK, PRIMARY } from "./ui";
 import { blockWindows, PLAN_DATE, PLAN_VERSION, PLAN_VERSION_NEXT } from "../data/opsData";
 import { decisionAudit, recommendedPlan, type DecisionEntry } from "../data/planData";
@@ -12,7 +12,16 @@ import { jobById } from "../data/jobsData";
 import { planStats } from "../lib/plan";
 import { UtilBar } from "./TimelineUtil";
 import { getPlannerResult } from "../api/planner";
-import type { PlannerResult } from "../api/types";
+import type { AuditEntry, GovernedPlan, PlannerResult } from "../api/types";
+import {
+  getCurrentPlan,
+  getAuditHistory,
+  approvePlan,
+  modifyPlan,
+  rejectPlan,
+  lockPlan,
+} from "../api/approvals";
+import { ApiError } from "../api/client";
 import { PlanningQualityDashboard, buildQualityMetricsFromPlan } from "./PlannerKpiCard";
 
 export type PlanStatus = "Pending approval" | "Approved" | "Modified" | "Rejected" | "Locked";
@@ -49,6 +58,15 @@ const BANNER: Record<PlanStatus, { cls: string; text: string }> = {
     text: "LOCKED — decision frozen for audit until unlocked.",
   },
 };
+
+/* -------------------------------------------------------------------------- */
+/* Backend governance (§36–38) — ONE plan id for the demo night. The plan      */
+/* store id is `PLAN-{plan_version}`; run_plan stores PLAN-r1 when the         */
+/* planner first runs. Officer actions are executed BY the backend and        */
+/* recorded in its immutable audit trail — never by this component.           */
+/* -------------------------------------------------------------------------- */
+const PLAN_ID = "PLAN-r1";
+const DEFAULT_OFFICER = "Dy. Chief Controller (BCT)";
 
 const REJECT_PRESETS = [
   "W2 path encroaches the 12009 Shatabdi path",
@@ -187,6 +205,59 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
     return buildQualityMetricsFromPlan(plannerResult);
   }, [plannerResult]);
 
+  /* ---------------- backend governance state (§36–38) ------------------- */
+  const [governedPlan, setGovernedPlan] = useState<GovernedPlan | null>(null);
+  const [backendAudit, setBackendAudit] = useState<AuditEntry[]>([]);
+  const [govBusy, setGovBusy] = useState(false);
+  const [govError, setGovError] = useState<string | null>(null);
+  const [govNote, setGovNote] = useState<string | null>(null);
+
+  const refreshGovernance = useCallback(async () => {
+    // Both loaders resolve null/[] when the backend is unreachable — the UI
+    // then falls back to the seeded demo history and says so.
+    const [plan, audit] = await Promise.all([getCurrentPlan(), getAuditHistory(PLAN_ID)]);
+    setGovernedPlan(plan);
+    setBackendAudit(audit);
+  }, []);
+
+  useEffect(() => {
+    void refreshGovernance();
+  }, [refreshGovernance]);
+
+  const backendStatus = governedPlan?.status;
+
+  const runGovernanceAction = useCallback(
+    async (
+      action: "approve" | "modify" | "reject" | "lock",
+      reason: string,
+      affectedJobs: string[] = []
+    ) => {
+      setGovBusy(true);
+      setGovError(null);
+      setGovNote(null);
+      try {
+        const officer = DEFAULT_OFFICER;
+        const args = [PLAN_ID, officer, reason] as const;
+        if (action === "approve") await approvePlan(...args);
+        else if (action === "modify")
+          await modifyPlan(PLAN_ID, officer, reason, {}, affectedJobs);
+        else if (action === "reject") await rejectPlan(...args);
+        else await lockPlan(...args);
+        setGovNote(`Recorded in the backend audit trail — ${reason || action.toUpperCase()}.`);
+        await refreshGovernance();
+      } catch (error) {
+        setGovError(
+          error instanceof ApiError
+            ? `Governance action failed (${error.code}) — the local decision above is not recorded in the backend audit trail.`
+            : "Governance action failed — backend unreachable; only the local decision above was recorded."
+        );
+      } finally {
+        setGovBusy(false);
+      }
+    },
+    [refreshGovernance]
+  );
+
   const stats = useMemo(
     () => planStats(blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })), recommendedPlan.assignments),
     []
@@ -202,8 +273,18 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
         subtitle="The officer is the only step that authorizes a block"
         right={
           <button
-            onClick={onToggleLock}
-            disabled={status === "Pending approval"}
+            onClick={() => {
+              if (!locked) {
+                // Lock is a governance transition — the backend freezes it too.
+                onToggleLock();
+                void runGovernanceAction("lock", "Decision locked for audit");
+              } else {
+                // No backend unlock transition exists — be explicit about it.
+                onToggleLock();
+                setGovNote("Unlock is local to this demo — the backend plan store stays LOCKED until a new plan version is issued.");
+              }
+            }}
+            disabled={status === "Pending approval" || govBusy}
             className="focus-primary rounded-lg border border-[#d9ddef] bg-white px-3 py-1.5 text-[11px] font-bold text-[#4d5468] transition-colors duration-200 hover:bg-[#f5f6fc] disabled:opacity-50"
           >
             {locked ? "Unlock decision" : "Lock decision"}
@@ -218,6 +299,50 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
           <span className="mt-1 block text-[11px] font-medium text-[#b45309]">Revised plan: {revisedNote}</span>
         )}
       </div>
+
+      {/* Backend governance strip (§36) — the real lifecycle + audit trail */}
+      <Card className="mb-3 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">
+              Backend plan store
+            </span>
+            <span className="rounded bg-[#f1f3f9] px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#4d5468]">
+              {PLAN_ID}
+            </span>
+            {backendStatus ? (
+              <span
+                className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-extrabold uppercase ${
+                  backendStatus === "LOCKED"
+                    ? "bg-[#f1f3f9] text-[#4d5468]"
+                    : backendStatus === "APPROVED" || backendStatus === "MODIFIED"
+                      ? "bg-[#f0fdf4] text-[#166534]"
+                      : backendStatus === "REJECTED"
+                        ? "bg-[#fef2f2] text-[#991b1b]"
+                        : "bg-[#eef0fa] text-[#2e3092]"
+                }`}
+              >
+                {backendStatus}
+              </span>
+            ) : (
+              <span className="text-[10px] italic text-[#878da1]">
+                unreachable — run the planner once (Planning → Generate Plan) to create {PLAN_ID}
+              </span>
+          )}
+          </div>
+          <button
+            onClick={() => void refreshGovernance()}
+            disabled={govBusy}
+            className="focus-primary rounded border border-[#e3e6f0] bg-white px-2 py-0.5 text-[10px] font-semibold text-[#4d5468] transition-colors duration-200 hover:bg-[#f5f6fc] disabled:opacity-50"
+          >
+            {govBusy ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {govNote && <div className="mt-2 text-[11px] text-[#166534]">✓ {govNote}</div>}
+        {govError && (
+          <div className="mt-2 text-[11px] font-semibold text-[#dc2626]">{govError}</div>
+        )}
+      </Card>
 
       {/* Plan summary strip */}
       <Card className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3">
@@ -266,13 +391,19 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
           <>
             <div className="mb-3 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">Officer decision</div>
             <div className="grid grid-cols-3 gap-2">
-              <Button onClick={() => onAction("Approved", "")} disabled={locked}>
+              <Button
+                onClick={() => {
+                  onAction("Approved", "");
+                  void runGovernanceAction("approve", "Approved as recommended");
+                }}
+                disabled={locked || govBusy}
+              >
                 Approve
               </Button>
-              <Button variant="secondary" onClick={() => setModifyOpen(true)} disabled={locked}>
+              <Button variant="secondary" onClick={() => setModifyOpen(true)} disabled={locked || govBusy}>
                 Modify
               </Button>
-              <Button variant="danger" onClick={() => setRejecting(true)} disabled={locked}>
+              <Button variant="danger" onClick={() => setRejecting(true)} disabled={locked || govBusy}>
                 Reject
               </Button>
             </div>
@@ -282,7 +413,16 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
             </p>
           </>
         ) : (
-          <RejectForm reason={reason} setReason={setReason} onCancel={() => setRejecting(false)} onConfirm={() => onAction("Rejected", reason.trim())} disabled={needsReason} />
+          <RejectForm
+            reason={reason}
+            setReason={setReason}
+            onCancel={() => setRejecting(false)}
+            onConfirm={() => {
+              onAction("Rejected", reason.trim());
+              void runGovernanceAction("reject", reason.trim());
+            }}
+            disabled={needsReason || govBusy}
+          />
         )}
       </Card>
 
@@ -323,12 +463,56 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
         </table>
       </Card>
 
+      {/* Backend audit trail (§38) — immutable, backend-owned reason codes */}
+      {backendAudit.length > 0 && (
+        <>
+          <h3 className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
+            Backend audit trail — {PLAN_ID}
+          </h3>
+          <Card className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-[#eef0f6] text-[10px] uppercase tracking-wider text-[#878da1]">
+                  <th className="px-4 py-2.5">#</th>
+                  <th className="px-4 py-2.5">Timestamp (UTC)</th>
+                  <th className="px-4 py-2.5">Action</th>
+                  <th className="px-4 py-2.5">Officer</th>
+                  <th className="px-4 py-2.5">Reason</th>
+                  <th className="px-4 py-2.5">Jobs affected</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...backendAudit].reverse().map((entry) => (
+                  <tr key={entry.entry_id} className="border-b border-[#eef0f6] last:border-0">
+                    <td className="px-4 py-2.5 font-mono text-[#878da1]">{entry.entry_id}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 font-mono text-[#4d5468]">
+                      {entry.timestamp.slice(0, 19).replace("T", " ")}
+                    </td>
+                    <td className="px-4 py-2.5 font-bold uppercase text-[#2e3092]">{entry.action}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-[#4d5468]">{entry.officer}</td>
+                    <td className="max-w-[260px] px-4 py-2.5 text-[#4d5468]">{entry.reason || "—"}</td>
+                    <td className="px-4 py-2.5 font-mono text-[10px] text-[#878da1]">
+                      {entry.affected_jobs.length ? entry.affected_jobs.join(", ") : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
+
       {modifyOpen && (
         <ModifyDrawer
           onClose={() => setModifyOpen(false)}
           onApply={(summary) => {
             setModifyOpen(false);
             onAction("Modified", summary);
+            // Affected ids: the tokens in the summary that look like J-##.
+            const affected = (summary.match(/J-\d+/g) ?? []).filter(
+              (id, i, arr) => arr.indexOf(id) === i
+            );
+            void runGovernanceAction("modify", summary, affected);
           }}
         />
       )}

@@ -3,18 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "description": "Intelligent Railway Block Planning, Evaluation, and Optimization System",
-  "workspaces": [
-    "frontend"
-  ],
   "scripts": {
     "dev": "npm run dev --prefix frontend",
     "dev:frontend": "npm run dev --prefix frontend",
-    "dev:backend": "python -m backend.app.api",
+    "dev:backend": "python -m backend.app.main",
     "build": "npm run build --prefix frontend",
     "preview": "npm run preview --prefix frontend",
+    "typecheck": "tsc --noEmit --project frontend/tsconfig.json",
     "test": "npm run test:backend && npm run test:frontend",
-    "test:frontend": "npm run build --prefix frontend",
-    "test:backend": "python -m pytest backend/app/tests"
+    "test:backend": "python -m pytest backend/app/tests",
+    "test:frontend": "npm run build --prefix frontend"
   },
   "keywords": [
     "railway",

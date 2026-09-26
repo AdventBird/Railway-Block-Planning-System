@@ -6,7 +6,7 @@
 // reassignments, progressive conflict reveals, and Before vs After comparison.
 // Nothing is saved until the officer sends the revised plan to Approval.
 // ---------------------------------------------------------------------------
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   Button,
   Card,
@@ -23,6 +23,25 @@ import { toast, ToastContainer } from "./Toast";
 import { jobById, jobs } from "../data/jobsData";
 import { recommendedPlan, type DeferredJob } from "../data/planData";
 import { occupiedUnion } from "../lib/plan";
+import { getPlannerResult, runReplan } from "../api/planner";
+import {
+  listScenarios,
+  runScenario,
+  specialTrainEvent,
+  windowReducedEvent,
+  windowWithdrawnEvent,
+  priorityChangeEvent,
+  type ScenarioMeta,
+} from "../api/simulation";
+import type { PlannerResult, ReplanEvent, ReplanResult } from "../api/types";
+import { ApiError } from "../api/client";
+import {
+  backendWindowOfSeedId,
+  backendJobOfSeedId,
+  seedJobOfBackendId,
+  seedWindowOfBackendId,
+} from "../data/idMap";
+import { blockWindows, corridorLabel, existingBlocks } from "../data/opsData";
 import { UtilBar } from "./TimelineUtil";
 import {
   PlanningQualityDashboard,
@@ -92,6 +111,44 @@ const mins = (a: string, b: string): number =>
     (new Date(`2000-01-01T${b}`).getTime() - new Date(`2000-01-01T${a}`).getTime()) /
       60000
   );
+
+/* ------------------------------------------------------------------------ */
+/* Live replan bridge (§33 / §24)                                            */
+/* ------------------------------------------------------------------------ */
+/* Each scenario maps to ONE real backend event. Ids are converted through   */
+/* the idMap bridge (§46) because the replanner matches BACKEND canonical    */
+/* ids (BLK-… windows, TMS-/SMMS-/TDMS- jobs) while the seeded demo uses     */
+/* W1…W3 / J-01…J-13. Seed W2 has no backend COA row (TDL–CNB 240′ is a      */
+/* planning-desk window only), so its scenarios act on the canonical C2      */
+/* window BLK-2026-0417 — the real registered possession on that corridor.   */
+
+const scenarioReplanEvent = (scenarioId: string): ReplanEvent => {
+  switch (scenarioId) {
+    case "relief":
+      // Protected relief train on C1 (NDLS–GZB) 02:30–03:30.
+      return specialTrainEvent({
+        id: "SIM-RELIEF-00214",
+        number: "00214",
+        corridorId: "C1",
+        start: "02:30",
+        end: "03:30",
+      });
+    case "reduce":
+      // W2 down to 180 min → canonical C2 window curtailed to 180 min.
+      return windowReducedEvent(backendWindowOfSeedId("W2"), 180);
+    case "remove":
+      // W3 withdrawn → canonical PRYJ–DDU possession BLK-2026-0431.
+      return windowWithdrawnEvent(backendWindowOfSeedId("W3"));
+    case "priority":
+      // J-10 raised Tier 4 → 2 → canonical job TDMS-OHE-773.
+      return priorityChangeEvent(backendJobOfSeedId("J-10"), 2);
+    case "restriction":
+      // Freight curfew compresses the C2 machine window the same way.
+      return windowReducedEvent(backendWindowOfSeedId("W2"), 180);
+    default:
+      return { type: "OPERATIONAL_RESTRICTION", payload: {} };
+  }
+};
 
 const baseState = (): SimState => ({
   windows: [
@@ -678,6 +735,80 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
   const [diffFilter, setDiffFilter] = useState<"all" | "changed" | "deferred" | "unchanged">("all");
   const [revealedConflictsCount, setRevealedConflictsCount] = useState<number>(0);
 
+  // Live replan state (§33) — the AFTER plan is the real CP-SAT replan result.
+  const [replanResult, setReplanResult] = useState<ReplanResult | null>(null);
+  const [replanning, setReplanning] = useState(false);
+  const [replanError, setReplanError] = useState<string | null>(null);
+  const [infeasibleInfo, setInfeasibleInfo] = useState<ReplanResult | null>(null);
+
+  // Phase 9 — the BEFORE plan comes from the real planner (POST
+  // /api/planner/run), never from the seeded plan data.
+  const [liveBefore, setLiveBefore] = useState<PlannerResult | null>(null);
+  const [beforeLoading, setBeforeLoading] = useState(false);
+  const [beforeError, setBeforeError] = useState<string | null>(null);
+
+  // Phase 8 — one scenario registry: the backend's canonical scenario ids.
+  const [backendScenarios, setBackendScenarios] = useState<ScenarioMeta[]>([]);
+  const [registryRun, setRegistryRun] = useState<Record<string, unknown> | null>(null);
+  const [registryBusy, setRegistryBusy] = useState<string | null>(null);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+
+  /** Run one canonical backend scenario (POST /api/scenarios/run). */
+  const runRegistryScenario = useCallback(async (scenarioId: string) => {
+    setRegistryBusy(scenarioId);
+    setRegistryError(null);
+    try {
+      const payload = await runScenario(scenarioId);
+      setRegistryRun(payload);
+      const status = String((payload as Record<string, unknown>).status ?? "");
+      if (status === "INFEASIBLE") {
+        toast.warn("Scenario INFEASIBLE", `${scenarioId}: the solver proved no feasible schedule exists.`);
+      } else {
+        toast.success("Scenario Run Complete", `${scenarioId} solved: ${status}`);
+      }
+    } catch {
+      setRegistryRun(null);
+      setRegistryError("Backend scenario run failed — the registry scenarios need the backend on :8000.");
+    } finally {
+      setRegistryBusy(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setBeforeLoading(true);
+    getPlannerResult()
+      .then((result) => {
+        if (!active) return;
+        if (result.source.status === "live") {
+          setLiveBefore(result);
+          setBeforeError(null);
+        } else {
+          setBeforeError(
+            result.source.message ??
+              "Backend planner unavailable — the BEFORE plan below is the seeded demo plan."
+          );
+        }
+      })
+      .catch(() => {
+        if (active)
+          setBeforeError("Backend planner unavailable — the BEFORE plan below is the seeded demo plan.");
+      })
+      .finally(() => {
+        if (active) setBeforeLoading(false);
+      });
+    listScenarios()
+      .then((scenarios) => {
+        if (active) setBackendScenarios(scenarios);
+      })
+      .catch(() => {
+        /* registry stays empty — the picker keeps the local scenario cards */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -689,16 +820,158 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
     }
   }, [initialScenario]);
 
-  const base = useMemo(() => baseState(), []);
+  /* ---------------------------------------------------------------------- */
+  /* BEFORE state: the real planner result (Phase 9), seed as labeled        */
+  /* fallback when the backend is unreachable (§29 — never a silent fake).   */
+  /* ---------------------------------------------------------------------- */
+  const base = useMemo<SimState>(() => {
+    if (!liveBefore) return baseState();
+    const windows = [
+      ...blockWindows.map((w) => ({ id: w.id, label: corridorLabel(w.corridorId), minutes: w.minutes })),
+      ...existingBlocks
+        .filter((b) => !blockWindows.some((w) => w.id === b.id))
+        .map((b) => ({ id: b.id, label: corridorLabel(b.corridorId), minutes: mins(b.start, b.end) })),
+    ];
+    const scheduled: SimJob[] = liveBefore.assignments.map((a) => ({
+      jobId: seedJobOfBackendId(a.jobId) ?? a.jobId,
+      windowId: seedWindowOfBackendId(a.windowId) ?? a.windowId,
+      minutes: mins(a.start, a.end),
+      start: a.start,
+      end: a.end,
+      note: a.note,
+    }));
+    const deferred = liveBefore.deferred.map((d) => ({
+      jobId: seedJobOfBackendId(d.jobId) ?? d.jobId,
+      code: d.code,
+      reason: d.reason,
+    }));
+    const impact =
+      liveBefore.trainImpact && liveBefore.trainImpact.length
+        ? liveBefore.trainImpact
+        : [...recommendedPlan.trainImpact];
+    return { windows, scheduled, deferred, impact };
+  }, [liveBefore]);
   const baseStats = useMemo(() => simStats(base), [base]);
   const scenario = SCENARIOS.find((s) => s.id === selectedId) ?? null;
+  const scenarioIsBackendRegistered = backendScenarios.some(
+    (meta) => meta.id === selectedId
+  );
 
+  /* ---------------------------------------------------------------------- */
+  /* AFTER state: live replan when the backend answers, scripted apply()    */
+  /* otherwise — with the source shown honestly either way (§29).           */
+  /* ---------------------------------------------------------------------- */
   const after = useMemo(() => {
     if (!scenario) return null;
-    const s = baseState();
+
+    // LIVE: real POST /api/replan result mapped onto the simulation model.
+    if (replanResult) {
+      const r = replanResult;
+      const windows = base.windows.map((w) => {
+        const copy = { ...w };
+        if (
+          (scenario.id === "reduce" || scenario.id === "restriction") &&
+          w.id === "W2"
+        ) {
+          copy.minutes = 180;
+          copy.label = "TDL–CNB (DOWN) — reduced window";
+        }
+        if (scenario.id === "remove" && w.id === "W3") {
+          copy.label = "PRYJ–DDU (UP) — withdrawn";
+        }
+        return copy;
+      });
+
+      // Canonical window ids → seeded lane ids; rows without a seed lane
+      // (backend-only blocks/jobs) keep their canonical id and are counted in
+      // the stats — the diff matrix lists seed jobs, stats count everything.
+      const scheduled: SimJob[] = r.assignments.map((a) => {
+        const seedId = seedJobOfBackendId(a.jobId) ?? a.jobId;
+        return {
+          jobId: seedId,
+          windowId: seedWindowOfBackendId(a.windowId) ?? a.windowId,
+          minutes: mins(a.start, a.end),
+          start: a.start,
+          end: a.end,
+          note: a.note ?? (a.parallel ? "parallel — same protection" : undefined),
+        };
+      });
+
+      const deferred = r.deferred_jobs.map((d) => ({
+        jobId: seedJobOfBackendId(d.jobId) ?? d.jobId,
+        code: d.code,
+        reason: d.reason,
+        note: d.reasonCodes?.length ? d.reasonCodes.join(" · ") : undefined,
+      }));
+
+      const impact = r.train_impacts.length ? r.train_impacts : [...base.impact];
+      const state: SimState = { windows, scheduled, deferred, impact };
+
+      // Backend-computed metrics win when present (§28: computed, not faked);
+      // simStats fills any field the payload omits.
+      const local = simStats(state);
+      const stats: SimStats = {
+        blocks: r.metrics.blocks ?? local.blocks,
+        jobs: r.metrics.scheduled ?? r.metrics.jobs ?? local.jobs,
+        deferred: r.metrics.deferred ?? local.deferred,
+        utilization: Math.round(r.metrics.utilization ?? local.utilization),
+        impact: local.impact,
+      };
+      return { state, stats };
+    }
+
+    // FALLBACK: the original scripted projection (backend unreachable).
+    // Uses the same BEFORE state (live when available) — never a fake
+    // comparison between two different sources.
+    const s: SimState = {
+      windows: base.windows.map((w) => ({ ...w })),
+      scheduled: base.scheduled.map((j) => ({ ...j })),
+      deferred: [...base.deferred],
+      impact: [...base.impact],
+    };
     scenario.apply(s);
     return { state: s, stats: simStats(s) };
-  }, [scenario]);
+  }, [scenario, replanResult, base]);
+
+  /** One real POST /api/replan per scenario selection (§33) — never fake. */
+  const executeLiveReplan = useCallback(
+    async (scenarioId: string): Promise<boolean> => {
+      setReplanning(true);
+      setReplanError(null);
+      setInfeasibleInfo(null);
+      try {
+        const result = await runReplan(scenarioReplanEvent(scenarioId));
+        if (result.status === "INFEASIBLE") {
+          // Reported honestly (§46) — no silent fallback to the script.
+          setInfeasibleInfo(result);
+          setReplanResult(null);
+          toast.warn(
+            "Replan INFEASIBLE",
+            `No rulebook-feasible schedule exists for this event${result.reason_codes.length ? ` (${result.reason_codes.join(", ")})` : ""}.`
+          );
+        } else {
+          setReplanResult(result);
+          toast.success(
+            "Live Replan Complete",
+            `CP-SAT ${result.status} · ${result.plan_version} · ${result.assignments.length} scheduled · ${result.deferred_jobs.length} deferred`
+          );
+        }
+        return true;
+      } catch (error) {
+        setReplanResult(null);
+        setInfeasibleInfo(null);
+        setReplanError(
+          error instanceof ApiError
+            ? `Backend replan unavailable — showing the scripted projection instead. (${error.code})`
+            : "Backend replan unavailable — showing the scripted projection instead."
+        );
+        return false;
+      } finally {
+        setReplanning(false);
+      }
+    },
+    []
+  );
 
   const simulatedQualityMetrics = useMemo<PlannerQualityMetrics | null>(() => {
     if (!after) return null;
@@ -716,9 +989,22 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
       possessionsAvoided: Math.max(0, after.stats.jobs - after.stats.blocks),
       jobsScheduled: after.stats.jobs,
       jobsDeferred: after.stats.deferred,
-      plannerStatus: "Feasible",
+      plannerStatus:
+        replanError !== null
+          ? "Feasible"
+          : infeasibleInfo
+            ? "Infeasible"
+            : replanResult?.status === "OPTIMAL"
+              ? "Optimal"
+              : "Feasible",
     };
-  }, [after]);
+  }, [after, replanResult, infeasibleInfo, replanError]);
+
+  /** Fire the real replan once per stage-5 arrival (button, play, or step). */
+  useEffect(() => {
+    if (stage < 5 || !scenario) return;
+    void executeLiveReplan(scenario.id);
+  }, [stage, scenario, executeLiveReplan]);
 
   // Automated stage progression when playing
   useEffect(() => {
@@ -869,6 +1155,11 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
                 setStage(0);
                 setIsPlaying(false);
                 setRevealedConflictsCount(0);
+                // Drop the previous scenario's result — the AFTER plan must
+                // always correspond to the selected event (never a stale mix).
+                setReplanResult(null);
+                setInfeasibleInfo(null);
+                setReplanError(null);
                 toast.info("Scenario Selected", sc.label);
               }}
               className={`hover-lift group focus-primary rounded-xl border p-3 text-left transition-all duration-200 ${
@@ -894,6 +1185,180 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
         })}
       </div>
 
+      {/* Phase 8 — ONE scenario registry: the backend's canonical scenarios,
+          executed by the backend itself via POST /api/scenarios/run. */}
+      {backendScenarios.length > 0 && (
+        <Card className="p-4 bg-white">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#171a30]">
+                Canonical Scenario Registry (backend-defined)
+              </span>
+              <span className="rounded bg-[#f1f3f9] px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#4d5468]">
+                POST /api/scenarios/run
+              </span>
+            </div>
+            {registryError && (
+              <span className="text-[10px] font-semibold text-[#92400e]">{registryError}</span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {backendScenarios.map((meta) => {
+              const busy = registryBusy === meta.id;
+              const result = registryRun as
+                | { scenario_id?: string; status?: string; version?: string; metrics?: Record<string, unknown>; before?: Record<string, unknown>; after?: Record<string, unknown> }
+                | null;
+              const ranThis = result?.scenario_id === meta.id;
+              return (
+                <div
+                  key={meta.id}
+                  className={`rounded-xl border p-3 transition-all duration-200 ${
+                    ranThis
+                      ? "border-[#2e3092]/50 bg-[#eef0fa]/50"
+                      : "border-[#e3e6f0] bg-[#fafbfd]"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="font-mono text-[9px] font-extrabold uppercase text-[#2e3092]">
+                      {meta.id}
+                    </span>
+                    <span className="rounded bg-[#f1f3f9] px-1 py-0.5 font-mono text-[8px] font-bold text-[#4d5468]">
+                      {meta.category}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] font-bold text-[#171a30]" title={meta.name}>
+                    {meta.name}
+                  </div>
+                  <div className="mt-0.5 text-[10px] leading-snug text-[#878da1] line-clamp-2">
+                    {meta.description}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <Button
+                      variant={ranThis ? "secondary" : "primary"}
+                      disabled={busy || registryBusy !== null}
+                      onClick={() => void runRegistryScenario(meta.id)}
+                    >
+                      {busy ? "Solving…" : ranThis ? "Re-run" : "Run on backend"}
+                    </Button>
+                    {ranThis && (
+                      <span
+                        className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-extrabold uppercase ${
+                          result?.status === "INFEASIBLE"
+                            ? "bg-[#fef2f2] text-[#991b1b]"
+                            : "bg-[#f0fdf4] text-[#166534]"
+                        }`}
+                      >
+                        {result?.status} · {result?.version}
+                      </span>
+                    )}
+                  </div>
+                  {ranThis && result?.metrics && (
+                    <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 border-t border-[#eef0f6] pt-1.5 font-mono text-[9px] text-[#4d5468]">
+                      <span>scheduled</span>
+                      <span className="text-right font-bold text-[#171a30]">
+                        {String(result.metrics.scheduled ?? "—")}
+                      </span>
+                      <span>deferred</span>
+                      <span className="text-right font-bold text-[#171a30]">
+                        {String(result.metrics.deferred ?? "—")}
+                      </span>
+                      <span>utilization</span>
+                      <span className="text-right font-bold text-[#171a30]">
+                        {String(result.metrics.utilization ?? "—")}%
+                      </span>
+                      <span>blocks</span>
+                      <span className="text-right font-bold text-[#171a30]">
+                        {String(result.metrics.blocks ?? "—")}
+                      </span>
+                    </div>
+                  )}
+                  {ranThis && meta.id === "live_event" && result?.before && result?.after && (
+                    <div className="mt-1.5 border-t border-[#eef0f6] pt-1.5 text-[9px] text-[#4d5468]">
+                      BEFORE → AFTER computed by the backend (r1 → r2 with diffs).
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Honest status banners (§29 — never a silent fake) */}
+      {scenario && beforeLoading && (
+        <Card className="border-[#2e3092]/40 bg-[#eef0fa]/60 p-3">
+          <div className="flex items-center gap-2 text-[11px] font-bold text-[#2e3092]">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#2e3092]" />
+            Loading the real planner result (POST /api/planner/run) as the BEFORE plan…
+          </div>
+        </Card>
+      )}
+      {scenario && beforeError && !beforeLoading && (
+        <Card className="border-[#d97706]/50 bg-[#fffbeb] p-3">
+          <div className="flex items-start gap-2 text-[11px] leading-relaxed text-[#92400e]">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="font-bold">BEFORE plan is the seeded demo plan — backend planner unavailable.</div>
+              <div className="mt-0.5">{beforeError}</div>
+            </div>
+          </div>
+        </Card>
+      )}
+      {scenario && replanning && (
+        <Card className="border-[#2e3092]/40 bg-[#eef0fa]/60 p-3">
+          <div className="flex items-center gap-2 text-[11px] font-bold text-[#2e3092]">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#2e3092]" />
+            Running the real CP-SAT replan for “{scenario.label}” — the AFTER plan below is the
+            solver result, not a script.
+          </div>
+        </Card>
+      )}
+      {scenario && replanError && !replanning && (
+        <Card className="border-[#d97706]/50 bg-[#fffbeb] p-3">
+          <div className="flex items-start gap-2 text-[11px] leading-relaxed text-[#92400e]">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="font-bold">Backend replan unavailable — scripted projection shown.</div>
+              <div className="mt-0.5">{replanError}</div>
+            </div>
+          </div>
+        </Card>
+      )}
+      {scenario && infeasibleInfo && !replanning && (
+        <Card className="border-[#dc2626]/50 bg-[#fef2f2] p-3">
+          <div className="flex items-start gap-2 text-[11px] leading-relaxed text-[#991b1b]">
+            <ShieldAlert size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="font-bold">
+                Replan INFEASIBLE — no rulebook-feasible schedule exists for this event.
+              </div>
+              {infeasibleInfo.reason_codes.length > 0 && (
+                <div className="mt-1 font-mono text-[10px]">
+                  Reason codes: {infeasibleInfo.reason_codes.join(" · ")}
+                </div>
+              )}
+              {infeasibleInfo.newly_deferred_jobs.length > 0 && (
+                <div className="mt-1">
+                  Blocking: {infeasibleInfo.newly_deferred_jobs.map((d) => d.jobId).join(", ")}
+                </div>
+              )}
+              {infeasibleInfo.newly_deferred_jobs.some(
+                (d) => (d.blockingConstraints ?? []).length > 0
+              ) && (
+                <ul className="mt-1 list-inside list-disc">
+                  {infeasibleInfo.newly_deferred_jobs
+                    .flatMap((d) => d.blockingConstraints ?? [])
+                    .slice(0, 3)
+                    .map((constraint, i) => (
+                      <li key={i}>{constraint}</li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Configuration & Replay Studio Bar */}
       {scenario && (
         <Card className="border-[#2e3092]/40 bg-white p-4 shadow-sm">
@@ -909,6 +1374,11 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
                 <span className="rounded-full bg-[#d97706]/15 px-2 py-0.5 font-mono text-[9px] font-bold text-[#92400e]">
                   Impacts: {scenario.affectedCorridor}
                 </span>
+                {scenarioIsBackendRegistered && (
+                  <span className="rounded-full bg-[#16a34a]/15 px-2 py-0.5 font-mono text-[9px] font-bold text-[#166534]">
+                    Backend registry ✓
+                  </span>
+                )}
               </div>
               <p className="mt-0.5 text-[11px] text-[#4d5468]">
                 {scenario.detail}
@@ -980,14 +1450,27 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
 
               <Button
                 variant={ran ? "secondary" : "primary"}
+                disabled={replanning}
                 onClick={() => {
+                  // Stage-5 arrival triggers the replan via the effect below;
+                  // re-run explicitly only when already parked on stage 5.
+                  if (stage >= 5) void executeLiveReplan(scenario.id);
                   setStage(5);
                   setRan(true);
                   setRevealedConflictsCount(scenario.conflicts.length);
-                  toast.success("Simulation Computed", "Jumped directly to optimized plan r2.");
+                  toast.info(
+                    "Replan Requested",
+                    replanning
+                      ? "CP-SAT replan already running against the backend…"
+                      : "Running the real CP-SAT replan for this event…"
+                  );
                 }}
               >
-                {ran ? "Re-evaluate plan" : "Fast-forward to r2"}
+                {replanning
+                  ? "Replanning… (CP-SAT)"
+                  : ran
+                    ? "Re-evaluate plan"
+                    : "Fast-forward to r2"}
               </Button>
             </div>
           </div>
@@ -1409,7 +1892,11 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
             </Card>
 
             <StatBlock
-              label="After (Revised r2)"
+              label={
+                replanResult
+                  ? `After (Revised ${replanResult.plan_version} — live CP-SAT)`
+                  : "After (Revised r2 — scripted projection)"
+              }
               stats={after.stats}
               tone={PRIMARY}
               highlight
@@ -1422,8 +1909,20 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
               <PlanningQualityDashboard
                 metrics={simulatedQualityMetrics}
                 title={`Simulated Plan Quality · ${scenario.label}`}
-                plannerStatus="Feasible"
-                sourceHint="Simulated Replan Engine · Advisory Only"
+                plannerStatus={
+                  replanError !== null
+                    ? "Feasible"
+                    : infeasibleInfo
+                      ? "Infeasible"
+                      : replanResult?.status === "OPTIMAL"
+                        ? "Optimal"
+                        : "Feasible"
+                }
+                sourceHint={
+                  replanResult
+                    ? `POST /api/replan · ${replanResult.plan_version} · live CP-SAT`
+                    : "Simulated Replan Engine · scripted fallback · Advisory Only"
+                }
               />
             </div>
           )}

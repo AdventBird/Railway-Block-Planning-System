@@ -51,8 +51,11 @@ def test_scenario_2_bundling_opportunity():
     assert "W-BND-1" in window_ids
 
     metrics = res["metrics"]
-    assert metrics["combined_possessions"] == 1
+    # Bundling metrics are computed from the actual plan, never hard-coded:
+    # baseline = 3 separate possessions, actual = windows in use, saved = diff.
+    assert metrics["baseline_possessions"] == 3
     assert metrics["possessions_used"] == 1
+    assert metrics["possessions_saved"] == metrics["baseline_possessions"] - metrics["possessions_used"]
     assert metrics["possessions_saved"] == 2
     assert metrics["bundled_jobs"] == 3
     assert set(metrics["departments_integrated"]) == {"Engineering", "S&T", "TRD"}

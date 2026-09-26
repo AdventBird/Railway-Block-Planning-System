@@ -119,8 +119,15 @@ HIGH_IMPORTANCE_KEYWORDS: Tuple[str, ...] = (
 
 
 @dataclass
-class MaintenanceJob:
-    """Canonical model for a railway maintenance job.
+class MaintenanceJobProjection:
+    """Optimizer-facing projection of a maintenance job (Phase 13).
+
+    This is a *view*, not a second domain model: it is always built FROM the
+    canonical ``backend.app.schemas.MaintenanceJob`` (via the CanonicalBridge
+    or ``from_dict``) and carries no persistence or data-quality machinery.
+    It exists so the priority/optimizer stack has a compact, mutable-in-memory
+    shape without duplicating the domain model. The one canonical domain
+    object remains ``backend.app.schemas.MaintenanceJob``.
 
     Supports both camelCase and snake_case attributes.
     Crucially, does not expose internal numeric scores in its public representation.
@@ -133,6 +140,8 @@ class MaintenanceJob:
     corridor_id: str = ""
     asset: str = ""
     duration_minutes: int = 0
+    setup_duration_minutes: int = 0
+    restore_duration_minutes: int = 0
     deadline: str = ""
     tier: Optional[int] = None
     tier_reason: str = ""
@@ -147,8 +156,8 @@ class MaintenanceJob:
     status: str = "pending"
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> MaintenanceJob:
-        """Create a MaintenanceJob instance from a dictionary, handling camelCase aliases."""
+    def from_dict(cls, data: Dict[str, Any]) -> "MaintenanceJobProjection":
+        """Create a MaintenanceJobProjection instance from a dictionary, handling camelCase aliases."""
         return cls(
             id=str(data.get("id") or data.get("job_id") or data.get("jobId") or ""),
             title=str(data.get("title") or ""),
@@ -157,6 +166,8 @@ class MaintenanceJob:
             corridor_id=str(data.get("corridor_id") or data.get("corridorId") or ""),
             asset=str(data.get("asset") or data.get("asset_name") or ""),
             duration_minutes=int(data.get("duration_minutes") or data.get("minutes") or 0),
+            setup_duration_minutes=int(data.get("setup_duration_minutes") or data.get("setup_minutes") or 0),
+            restore_duration_minutes=int(data.get("restore_duration_minutes") or data.get("restore_minutes") or 0),
             deadline=str(data.get("deadline") or data.get("due") or ""),
             tier=int(data["tier"]) if data.get("tier") is not None else None,
             tier_reason=str(data.get("tier_reason") or data.get("tierReason") or ""),
@@ -183,6 +194,8 @@ class MaintenanceJob:
             "corridorId": self.corridor_id,
             "asset": self.asset,
             "minutes": self.duration_minutes,
+            "setup_minutes": self.setup_duration_minutes,
+            "restore_minutes": self.restore_duration_minutes,
             "deadline": self.deadline,
             "tier": self.tier,
             "tierReason": self.tier_reason,
@@ -202,7 +215,7 @@ class PriorityEngine:
 
     @classmethod
     def _extract_field(
-        cls, job: Union[MaintenanceJob, Dict[str, Any]], *field_names: str, default: Any = None
+        cls, job: Union["MaintenanceJobProjection", Dict[str, Any]], *field_names: str, default: Any = None
     ) -> Any:
         """Extract a field value by checking multiple potential names."""
         for name in field_names:
@@ -230,7 +243,7 @@ class PriorityEngine:
         return round(normalized, 4)
 
     @classmethod
-    def assign_tier(cls, job: Union[MaintenanceJob, Dict[str, Any]]) -> int:
+    def assign_tier(cls, job: Union["MaintenanceJobProjection", Dict[str, Any]]) -> int:
         """Assign a maintenance job to a hard priority tier (0-4) using deterministic rules.
 
         Precedence:
@@ -319,7 +332,7 @@ class PriorityEngine:
         return Tier.TIER_4
 
     @classmethod
-    def calculate_internal_score(cls, job: Union[MaintenanceJob, Dict[str, Any]]) -> float:
+    def calculate_internal_score(cls, job: Union["MaintenanceJobProjection", Dict[str, Any]]) -> float:
         """Calculate a normalized internal weighted score (0.0 to 100.0).
 
         This score is strictly utilized for ordering jobs inside the same tier.
@@ -435,8 +448,8 @@ class PriorityEngine:
 
     @classmethod
     def rank_jobs(
-        cls, jobs: Sequence[Union[MaintenanceJob, Dict[str, Any]]]
-    ) -> List[Union[MaintenanceJob, Dict[str, Any]]]:
+        cls, jobs: Sequence[Union["MaintenanceJobProjection", Dict[str, Any]]]
+    ) -> List[Union["MaintenanceJobProjection", Dict[str, Any]]]:
         """Rank maintenance jobs deterministically using the Two-Level Priority Engine.
 
         Ordering Rules:
@@ -449,7 +462,7 @@ class PriorityEngine:
             Ordered list of jobs with tiers assigned. Public representations
             DO NOT expose the internal numeric score.
         """
-        scored_entries: List[Tuple[int, float, str, int, Union[MaintenanceJob, Dict[str, Any]]]] = []
+        scored_entries: List[Tuple[int, float, str, int, Union["MaintenanceJobProjection", Dict[str, Any]]]] = []
 
         for original_idx, job in enumerate(jobs):
             # Compute tier and score
@@ -464,7 +477,7 @@ class PriorityEngine:
                 if "tierReason" not in job_copy and "tier_reason" not in job_copy:
                     job_copy["tierReason"] = TIER_NAMES.get(tier, "Normal")
                 target_job = job_copy
-            elif isinstance(job, MaintenanceJob):
+            elif isinstance(job, MaintenanceJobProjection):
                 job_copy = copy.deepcopy(job)
                 job_copy.tier = tier
                 if not job_copy.tier_reason:
@@ -487,14 +500,14 @@ class PriorityEngine:
 
     @classmethod
     def rank_jobs_with_scores(
-        cls, jobs: Sequence[Union[MaintenanceJob, Dict[str, Any]]]
-    ) -> List[Tuple[Union[MaintenanceJob, Dict[str, Any]], int, float]]:
+        cls, jobs: Sequence[Union["MaintenanceJobProjection", Dict[str, Any]]]
+    ) -> List[Tuple[Union["MaintenanceJobProjection", Dict[str, Any]], int, float]]:
         """Internal helper for optimizer services that need (job, tier, internal_score) tuples.
 
         This method is strictly for future optimization algorithms (e.g. CP-SAT weights)
         and must not be connected to API responses or serialized to the frontend.
         """
-        scored_entries: List[Tuple[int, float, str, int, Union[MaintenanceJob, Dict[str, Any]], float]] = []
+        scored_entries: List[Tuple[int, float, str, int, Union["MaintenanceJobProjection", Dict[str, Any]], float]] = []
 
         for original_idx, job in enumerate(jobs):
             tier = cls.assign_tier(job)
@@ -504,7 +517,7 @@ class PriorityEngine:
             if isinstance(job, dict):
                 target_job = copy.deepcopy(job)
                 target_job["tier"] = tier
-            elif isinstance(job, MaintenanceJob):
+            elif isinstance(job, MaintenanceJobProjection):
                 target_job = copy.deepcopy(job)
                 target_job.tier = tier
             else:
@@ -516,7 +529,7 @@ class PriorityEngine:
         return [(entry[4], entry[0], entry[5]) for entry in scored_entries]
 
     @classmethod
-    def explanation(cls, job: Union[MaintenanceJob, Dict[str, Any]]) -> str:
+    def explanation(cls, job: Union["MaintenanceJobProjection", Dict[str, Any]]) -> str:
         """Generate a backend explanation for a job's tier without exposing numerical scoring.
 
         Example Output:
@@ -559,3 +572,9 @@ class PriorityEngine:
 
         bullet_points = "\n".join(f"- {r}" for r in reasons)
         return f"Tier {tier} ({tier_name})\nReason:\n{bullet_points}"
+
+
+#: Phase 13 — documented backward-compatibility alias.
+#: ``MaintenanceJob`` in this module is the optimizer-facing projection view;
+#: the one canonical domain model is ``backend.app.schemas.MaintenanceJob``.
+MaintenanceJob = MaintenanceJobProjection

@@ -1,0 +1,146 @@
+{
+  "$comment": "Cross-department priority normalisation (Feature 5). Departmental labels are never compared directly: each source system's vocabulary maps to canonical attributes here. Operators retune this file without code changes; database-backed overrides can shadow these keys.",
+  "version": "2026.09.1",
+  "departments": {
+    "ENGINEERING": "Engineering",
+    "P-WAY": "Engineering",
+    "WORKS": "Engineering",
+    "BRIDGE": "Engineering",
+    "S&T": "S&T",
+    "SIGNAL": "S&T",
+    "SIGNAL & TELECOM": "S&T",
+    "TELECOM": "S&T",
+    "TRD": "TRD",
+    "OHE": "TRD",
+    "TRACTION": "TRD",
+    "TRACTION DISTRIBUTION": "TRD"
+  },
+  "safety_consequence": {
+    "TMS": {
+      "CRITICAL": "IMMEDIATE_HALT",
+      "IMMEDIATE_HALT": "IMMEDIATE_HALT",
+      "MAJOR": "SPEED_RESTRICTION",
+      "SPEED_RESTRICTION": "SPEED_RESTRICTION",
+      "MINOR": "ROUTINE",
+      "ROUTINE": "ROUTINE"
+    },
+    "SMMS": {
+      "CRITICAL": "IMMEDIATE_HALT",
+      "MAJOR": "SPEED_RESTRICTION",
+      "MINOR": "ROUTINE",
+      "ROUTINE": "ROUTINE"
+    },
+    "TDMS": {
+      "IMMEDIATE_HALT": "IMMEDIATE_HALT",
+      "CRITICAL": "IMMEDIATE_HALT",
+      "SPEED_RESTRICTION": "SPEED_RESTRICTION",
+      "MAJOR": "SPEED_RESTRICTION",
+      "ROUTINE": "ROUTINE",
+      "MINOR": "ROUTINE"
+    },
+    "BDMS": {
+      "CRITICAL": "IMMEDIATE_HALT",
+      "MAJOR": "SPEED_RESTRICTION",
+      "MINOR": "ROUTINE"
+    }
+  },
+  "asset_criticality": {
+    "TMS": {
+      "SAFETY_CRITICAL": "SAFETY_CRITICAL",
+      "ESSENTIAL": "ESSENTIAL",
+      "DISCRETIONARY": "DISCRETIONARY",
+      "TRACK": "SAFETY_CRITICAL",
+      "BRIDGE": "SAFETY_CRITICAL",
+      "SIGNAL": "ESSENTIAL",
+      "OHE": "ESSENTIAL"
+    },
+    "SMMS": {
+      "INTERLOCKING": "SAFETY_CRITICAL",
+      "AXLE_COUNTER": "SAFETY_CRITICAL",
+      "SIGNAL": "ESSENTIAL",
+      "CABLE": "ESSENTIAL",
+      "TELECOM": "DISCRETIONARY"
+    },
+    "TDMS": {
+      "OHE": "SAFETY_CRITICAL",
+      "FEEDER": "SAFETY_CRITICAL",
+      "PSI": "ESSENTIAL",
+      "TOWER_WAGON": "DISCRETIONARY"
+    },
+    "BDMS": {
+      "BRIDGE": "SAFETY_CRITICAL",
+      "STRUCTURE": "ESSENTIAL"
+    }
+  },
+  "urgency": {
+    "TMS": {
+      "IMMEDIATE": "IMMEDIATE",
+      "HIGH": "HIGH",
+      "NORMAL": "NORMAL",
+      "LOW": "LOW"
+    },
+    "SMMS": {
+      "P1": "IMMEDIATE",
+      "P2": "HIGH",
+      "P3": "NORMAL",
+      "P4": "LOW",
+      "IMMEDIATE": "IMMEDIATE",
+      "HIGH": "HIGH",
+      "NORMAL": "NORMAL",
+      "LOW": "LOW"
+    },
+    "TDMS": {
+      "URGENT": "IMMEDIATE",
+      "PRIORITY": "HIGH",
+      "ROUTINE": "NORMAL",
+      "PLANNED": "LOW",
+      "IMMEDIATE": "IMMEDIATE",
+      "HIGH": "HIGH",
+      "NORMAL": "NORMAL",
+      "LOW": "LOW"
+    },
+    "BDMS": {
+      "MANDATORY": "HIGH",
+      "IMMEDIATE": "IMMEDIATE",
+      "HIGH": "HIGH",
+      "NORMAL": "NORMAL",
+      "LOW": "LOW"
+    }
+  },
+  "operational_impact": {
+    "TMS": {
+      "NETWORK": "NETWORK",
+      "CORRIDOR": "CORRIDOR",
+      "SECTION": "LOCAL",
+      "LOCAL": "LOCAL",
+      "SPARE": "MINIMAL"
+    },
+    "SMMS": {
+      "NETWORK": "NETWORK",
+      "CORRIDOR": "CORRIDOR",
+      "SECTION": "LOCAL",
+      "LOCAL": "LOCAL",
+      "STATION": "LOCAL",
+      "SPARE": "MINIMAL"
+    },
+    "TDMS": {
+      "NETWORK": "NETWORK",
+      "CORRIDOR": "CORRIDOR",
+      "SECTION": "LOCAL",
+      "LOCAL": "LOCAL",
+      "SPARE": "MINIMAL"
+    },
+    "BDMS": {
+      "NETWORK": "NETWORK",
+      "CORRIDOR": "CORRIDOR",
+      "SECTION": "LOCAL",
+      "LOCAL": "LOCAL"
+    }
+  },
+  "overdue_policy": {
+    "$comment": "How overdue days translate into deadline_pressure. Boundaries are inclusive on the lower end.",
+    "IMMEDIATE_WITHIN_DAYS": 0,
+    "SHORT_WITHIN_DAYS": 7,
+    "OVERDUE": "OVERDUE"
+  }
+}

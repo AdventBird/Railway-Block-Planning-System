@@ -2,17 +2,20 @@
 // PLANNING WORKSPACE — the most important screen (§9).
 // Header (Tonight / Week / Month) · LEFT: work to schedule · CENTER: railway
 // timeline · RIGHT: recommended block plan · BOTTOM: deferred & conflicts.
+// Re-plan: every assignment, deferral and metric comes from the planner API
+// result (GET via getPlannerResult); "Generate Plan" re-runs the backend.
 // ---------------------------------------------------------------------------
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, Chip, TierChip, CompatChip, ReasonChip, DeptChip, Button, OK, OK_BG, PRIMARY, PRIMARY_SOFT, WARN, WARN_BG, type ViewId } from "./ui";
 import { JobDrawer, WindowDrawer, TrainDrawer, CompatDrawer, ConflictDrawer, ReasonDrawer, type WinRef } from "./drawers";
 import { WeekView, MonthView } from "./PlanningCalendar";
-import { Timeline, TimelineLegend, buildPlanLanes, type TimelineBar } from "./Timeline";
+import { Timeline, TimelineLegend, buildPlanLanes, corridorOfWindowId, type TimelineBar } from "./Timeline";
 import { UtilBar } from "./TimelineUtil";
 import { blockWindows, corridorLabel, existingBlocks, PLAN_DATE } from "../data/opsData";
+import { seedJobOfBackendId, seedWindowOfBackendId } from "../data/idMap";
 import { compatGroups, jobById, jobs, type Job } from "../data/jobsData";
 import { conflictEntries, recommendedPlan, type ReasonCode } from "../data/planData";
-import { occupiedUnion, planStats, spanMinutes } from "../lib/plan";
+import { occupiedUnion, spanMinutes, type PlanStats } from "../lib/plan";
 import {
   affectedTrainsOf,
   attemptedWindowOf,
@@ -20,12 +23,12 @@ import {
   getPlannerApiStatus,
   getPlannerResult,
   getWindowDetails,
-  plannerBaseUrl,
   type AffectedTrain,
   type DeferredJob,
   type PlannerAssignment,
   type WindowDetails,
 } from "../api/planner";
+import { apiBaseUrl } from "../api/client";
 import type { PlannerResult } from "../api/types";
 import {
   PlanningQualityDashboard,
@@ -80,6 +83,71 @@ function matchesDeferralFilter(row: DeferredJob, filter: DeferralFilter): boolea
   }
 }
 
+/** Map a backend canonical job id onto the seeded catalogue id (identity fallback). */
+function resolveJobId(rawId: string): string {
+  return jobById(rawId) ? rawId : seedJobOfBackendId(rawId) ?? rawId;
+}
+
+/**
+ * Seed context for one live assignment — title/tier/department come from the
+ * seeded catalogue when the backend id has a documented counterpart. Context
+ * is display-only: times and window ids are never overridden (§46).
+ */
+function seedAssignmentFor(a: PlannerAssignment): PlannerAssignment {
+  const seedId = resolveJobId(a.jobId);
+  if (seedId === a.jobId) return a;
+  const seed = jobById(seedId);
+  if (!seed) return a;
+  return {
+    ...a,
+    jobId: seedId,
+    title: a.title ?? seed.title,
+    department: (a.department as string) ?? seed.dept,
+    tier: a.tier ?? seed.tier,
+    corridorId: a.corridorId ?? seed.corridorId,
+    minutes: a.minutes ?? seed.minutes,
+    resources: a.resources ?? [...seed.resources],
+  };
+}
+
+/** Normalize a live payload: seed ids for display, backend times untouched. */
+function normalizeAssignmentsWithSeed(list: PlannerAssignment[]): PlannerAssignment[] {
+  return list.map(seedAssignmentFor);
+}
+
+/* ------------------------- deferred-row assembly -------------------------- */
+
+/** Seed fallback rows (jobId/code/reason) — the offline baseline explanations. */
+const seedDeferredRows: DeferredJob[] = recommendedPlan.deferred.map((entry) => ({
+  jobId: entry.jobId,
+  code: entry.code,
+  reason: entry.reason,
+}));
+
+/** Live backend row → display row with the seeded job id (ids only, text kept). */
+function normalizeDeferredRow(row: DeferredJob): DeferredJob {
+  return { ...row, jobId: resolveJobId(row.jobId) };
+}
+
+/**
+ * Live deferrals merged with the seed set: a live row always wins its job;
+ * seed rows are dropped when the live feed already covers (defers) that job
+ * AND when the live plan actually scheduled that job — the deferred list must
+ * never contradict the plan shown beside it (§46: one canonical plan).
+ */
+function mergeDeferredWithSeed(
+  liveRows: DeferredJob[],
+  scheduledSeedIds?: Iterable<string>
+): DeferredJob[] {
+  const live = liveRows.map(normalizeDeferredRow);
+  const covered = new Set(live.map((row) => row.jobId));
+  const scheduled = new Set(scheduledSeedIds ?? []);
+  const extras = seedDeferredRows.filter(
+    (row) => !covered.has(row.jobId) && !scheduled.has(row.jobId)
+  );
+  return [...live, ...extras];
+}
+
 interface CompatResolution {
   label: "Parallel" | "Sequential" | "Conditional";
   color: string;
@@ -91,6 +159,7 @@ function resolveCompatibility(
   assignment: PlannerAssignment,
   corridorId: string
 ): CompatResolution {
+  const seedJobId = resolveJobId(assignment.jobId);
   const explicit = (assignment as any).compatibility ?? (assignment as any).compatibilityStatus;
   if (explicit === "Conditional") return { label: "Conditional", color: WARN, bg: WARN_BG };
   if (explicit === "Parallel") return { label: "Parallel", color: OK, bg: OK_BG };
@@ -98,7 +167,7 @@ function resolveCompatibility(
 
   // Fallback to corridor compatibility group & parallel flag
   const group = compatGroups.find(
-    (g) => g.corridorId === corridorId && g.jobIds.includes(assignment.jobId)
+    (g) => g.corridorId === corridorId && g.jobIds.includes(seedJobId)
   );
   if (group?.status === "Conditional") {
     return { label: "Conditional", color: WARN, bg: WARN_BG };
@@ -115,24 +184,85 @@ interface WorkspaceProps {
   onNavigate: (v: ViewId) => void;
   /** Window to preselect (e.g. after the Planning Assistant prepares a draft). */
   initialWindowId?: string;
-}
-
-export function windowRefOf(id: string): WinRef {
+}/**
+ * Window reference for a drawer — seed ids resolve directly; backend
+ * canonical block ids (`BLK-2026-…`) resolve through the documented id map;
+ * otherwise a display-only reference is derived from the plan itself.
+ */
+export function windowRefOf(id: string, assignments: PlannerAssignment[] = recommendedPlan.assignments): WinRef {
   const w = blockWindows.find((x) => x.id === id);
   if (w)
     return { id: w.id, label: w.id, corridorId: w.corridorId, start: w.start, end: w.end, minutes: w.minutes, kind: "proposed", note: w.note };
-  const b = existingBlocks.find((x) => x.id === id)!;
+  const b = existingBlocks.find((x) => x.id === id);
+  if (b)
+    return {
+      id: b.id,
+      label: b.blockId,
+      corridorId: b.corridorId,
+      start: b.start,
+      end: b.end,
+      minutes: spanMinutes(b.start, b.end),
+      kind: "existing",
+      blockId: b.blockId,
+      status: b.status,
+      work: b.work,
+    };
+  // Backend canonical window id → seeded window (W1…W3 / E1…E3), then re-resolve.
+  const seedId = seedWindowOfBackendId(id);
+  if (seedId && seedId !== id) return windowRefOf(seedId, assignments);
+  // Live window we cannot localise — derive a reference from its assignments.
+  const inWin = assignments.filter((a) => a.windowId === id);
+  if (inWin.length > 0) {
+    return {
+      id,
+      label: id,
+      corridorId: corridorOfWindowId(id, inWin[0]) ?? inWin[0].corridorId ?? "C1",
+      start: inWin[0].start,
+      end: inWin[inWin.length - 1].end,
+      minutes: occupiedUnion(inWin),
+      kind: "existing",
+      note: "Live planner window (canonical block id)",
+    };
+  }
+  return { id, label: id, corridorId: "C1", start: "00:00", end: "00:00", minutes: 0, kind: "existing" };
+}
+
+/** Plan stats for ANY assignment set (seed or live), windows derived from ids. */
+function planStatsFor(assignments: PlannerAssignment[]): PlanStats {
+  const usedIds = [...new Set(assignments.map((a) => a.windowId))];
+  const usedMinutes = usedIds.reduce((sum, id) => {
+    const inWin = assignments.filter((a) => a.windowId === id);
+    const proposed = blockWindows.find((w) => w.id === id);
+    const seedId = proposed ? undefined : seedWindowOfBackendId(id);
+    const sanctioned =
+      existingBlocks.find((b) => b.id === id) ??
+      existingBlocks.find((b) => b.blockId === id) ??
+      existingBlocks.find((b) => b.id === seedId);
+    const total = proposed
+      ? proposed.minutes
+      : sanctioned
+        ? spanMinutes(sanctioned.start, sanctioned.end)
+        : inWin[0]
+          ? spanMinutes(inWin[0].start, inWin[0].end)
+          : 0;
+    return sum + total;
+  }, 0);
+  const occupied = usedIds.reduce(
+    (sum, id) => sum + occupiedUnion(assignments.filter((a) => a.windowId === id)),
+    0
+  );
+  const windowMinutes =
+    usedMinutes +
+    blockWindows
+      .filter((w) => !usedIds.includes(w.id))
+      .reduce((sum, w) => sum + w.minutes, 0);
   return {
-    id: b.id,
-    label: b.blockId,
-    corridorId: b.corridorId,
-    start: b.start,
-    end: b.end,
-    minutes: spanMinutes(b.start, b.end),
-    kind: "existing",
-    blockId: b.blockId,
-    status: b.status,
-    work: b.work,
+    blocks: usedIds.length,
+    jobs: assignments.length,
+    windowMinutes,
+    occupiedMinutes: occupied,
+    unusedMinutes: Math.max(0, windowMinutes - occupied),
+    utilization: windowMinutes ? Math.round((occupied / windowMinutes) * 100) : 0,
   };
 }
 
@@ -146,13 +276,30 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   const [conflictSubject, setConflictSubject] = useState<string | null>(null);
 
   /* ------------------------- Feature 23 · API state ------------------------ */
-  const [deferred, setDeferred] = useState<DeferredJob[]>(recommendedPlan.deferred);
+  const [deferred, setDeferred] = useState<DeferredJob[]>(seedDeferredRows);
   const [deferFilter, setDeferFilter] = useState<DeferralFilter>("all");
   const [reasonJobId, setReasonJobId] = useState<string | null>(null);
   const [reasonWindow, setReasonWindow] = useState<WindowDetails | null>(null);
   const [apiAssignments, setApiAssignments] = useState<PlannerAssignment[] | null>(null);
   const [apiSource, setApiSource] = useState<string | null>(null);
   const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
+  const [planning, setPlanning] = useState<boolean>(false);
+  const [planningError, setPlanningError] = useState<string | null>(null);
+
+  /** API assignments (display-normalized) when a backend answered, else seed. */
+  const effectiveAssignments: PlannerAssignment[] = useMemo(
+    () => apiAssignments ?? recommendedPlan.assignments,
+    [apiAssignments]
+  );
+
+  /** Seed job ids the live plan scheduled — used to drop contradicting seed deferred rows.
+   * The ref mirrors the memo so async loaders always see the latest plan. */
+  const liveScheduledSeedIds = useMemo(
+    () => new Set((apiAssignments ?? []).map((a) => a.jobId)),
+    [apiAssignments]
+  );
+  const liveScheduledRef = useRef<Set<string>>(liveScheduledSeedIds);
+  liveScheduledRef.current = liveScheduledSeedIds;
 
   // Load the plan + deferred jobs from the API layer (backend first, synthetic
   // fallback inside the service). The initial render always uses the seed plan,
@@ -164,8 +311,14 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
         const result = await getPlannerResult();
         if (!active) return;
         setPlannerResult(result);
-        setApiAssignments(result.assignments);
-        setDeferred(result.deferred);
+        const normalized = normalizeAssignmentsWithSeed(result.assignments);
+        setApiAssignments(normalized);
+        setDeferred(
+          mergeDeferredWithSeed(
+            result.deferred,
+            normalized.map((a) => a.jobId)
+          )
+        );
         setApiSource(result.source.status);
       } catch {
         /* the service never throws — keep the seed data on any surprise */
@@ -175,7 +328,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
       try {
         const rows = await getDeferredJobs();
         if (!active || !Array.isArray(rows) || rows.length === 0) return;
-        setDeferred(rows);
+        setDeferred(mergeDeferredWithSeed(rows, liveScheduledRef.current));
       } catch {
         /* keep the seed rows */
       }
@@ -185,13 +338,41 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
     };
   }, []);
 
+  /** "Generate Plan" — re-run the real planner (§29, honest status banner). */
+  const regenerate = async () => {
+    setPlanning(true);
+    setPlanningError(null);
+    try {
+      const result = await getPlannerResult();
+      setPlannerResult(result);
+      const normalized = normalizeAssignmentsWithSeed(result.assignments);
+      setApiAssignments(normalized);
+      setDeferred(
+        mergeDeferredWithSeed(
+          result.deferred,
+          normalized.map((a) => a.jobId)
+        )
+      );
+      setApiSource(result.source.status);
+      if (result.source.status !== "live") {
+        setPlanningError("Backend unreachable — showing the synthetic baseline plan.");
+      }
+    } catch (error) {
+      setPlanningError(
+        error instanceof Error ? `Planner request failed: ${error.message}` : "Planner request failed."
+      );
+    } finally {
+      setPlanning(false);
+    }
+  };
+
   // Window detail for the open deferral drawer — never allowed to reject.
   useEffect(() => {
     let active = true;
     setReasonWindow(null);
     if (!reasonJobId) return;
     const row = deferred.find((entry) => entry.jobId === reasonJobId);
-    const windowId = attemptedWindowOf(jobById(reasonJobId), recommendedPlan.assignments);
+    const windowId = attemptedWindowOf(jobById(reasonJobId), effectiveAssignments);
     if (!row || !windowId) return;
     (async () => {
       try {
@@ -204,29 +385,23 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
     return () => {
       active = false;
     };
-  }, [reasonJobId, deferred]);
+  }, [reasonJobId, deferred, effectiveAssignments]);
 
-  const lanes = useMemo(() => buildPlanLanes(), []);
-  const stats = useMemo(
-    () => planStats(blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })), recommendedPlan.assignments),
-    []
-  );
+  const lanes = useMemo(() => buildPlanLanes(effectiveAssignments), [effectiveAssignments]);
+  const stats = useMemo(() => planStatsFor(effectiveAssignments), [effectiveAssignments]);
 
-  const selected = windowRefOf(selectedId);
-  /** API assignments when a backend answered, otherwise the seed plan. */
-  const effectiveAssignments: PlannerAssignment[] = useMemo(
-    () => apiAssignments ?? recommendedPlan.assignments,
-    [apiAssignments]
-  );
+  const selected = windowRefOf(selectedId, effectiveAssignments);
   const selectedJobs = effectiveAssignments.filter((a) => a.windowId === selectedId);
-  const selectedDepts = [...new Set(selectedJobs.map((a) => a.department ?? jobById(a.jobId)?.dept ?? "").filter(Boolean))];
-  const selectedImpact = recommendedPlan.trainImpact.filter((t) => t.includes(selectedId)).length;
+  const selectedDepts = [...new Set(selectedJobs.map((a) => a.department ?? jobById(resolveJobId(a.jobId))?.dept ?? "").filter(Boolean))];
+  const selectedImpact = planAffectsWindow(selectedId, effectiveAssignments)
+    ? (plannerResult?.trainImpact ?? recommendedPlan.trainImpact).filter((t) => t.includes(selectedId)).length
+    : 0;
   const selectedCompat = compatGroups.find((g) => g.corridorId === selected.corridorId);
   const selectedDeferred = deferred.filter((d) => d.corridorId === selected.corridorId);
 
   /** Department shown for an assignment — API value first, seed lookup otherwise. */
   const deptOf = (assignment: PlannerAssignment): string | undefined => {
-    const resolved = assignment.department ?? jobById(assignment.jobId)?.dept;
+    const resolved = assignment.department ?? jobById(resolveJobId(assignment.jobId))?.dept;
     return resolved ? String(resolved) : undefined;
   };
 
@@ -245,14 +420,14 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   /** The deferral the Reason drawer is explaining. */
   const reasonRow = reasonJobId ? deferred.find((row) => row.jobId === reasonJobId) ?? null : null;
   const reasonWindowId = reasonRow
-    ? attemptedWindowOf(jobById(reasonRow.jobId), recommendedPlan.assignments)
+    ? attemptedWindowOf(jobById(reasonRow.jobId), effectiveAssignments)
     : null;
   const reasonTrains: AffectedTrain[] = reasonRow
     ? affectedTrainsOf(reasonRow.corridorId, reasonWindowId)
     : [];
   const reasonSource =
     apiSource === "live"
-      ? `Planner backend${plannerBaseUrl() ? ` · ${plannerBaseUrl()}` : ""}`
+      ? `Planner backend · ${apiBaseUrl()}`
       : getPlannerApiStatus().message ?? "Synthetic planning dataset";
 
   const pick = (b: TimelineBar) => {
@@ -267,6 +442,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   };
 
   const isolationConflict = conflictEntries.find((c) => c.code === "ISOLATION_CONFLICT") ?? conflictEntries[0];
+  const planVersionLabel = plannerResult?.version ? `PLAN ${plannerResult.version}` : "PLAN r3";
 
   if (horizon !== "tonight") {
     return (
@@ -280,14 +456,45 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   return (
     <div>
       <WorkspaceHeader horizon={horizon} setHorizon={setHorizon} />
+      {/* Honest status banner — INFEASIBLE / backend errors are never hidden (§29, §46) */}
+      {(plannerResult?.status === "INFEASIBLE" || planningError) && (
+        <div
+          role="status"
+          className={`mb-3 rounded-lg border px-4 py-2.5 text-xs ${
+            plannerResult?.status === "INFEASIBLE"
+              ? "border-[#fecaca] bg-[#fef2f2] text-[#b91c1c]"
+              : "border-[#fde68a] bg-[#fffbeb] text-[#92400e]"
+          }`}
+        >
+          {plannerResult?.status === "INFEASIBLE" ? (
+            <>
+              <div className="text-sm font-bold">
+                No feasible schedule exists for the current world — INFEASIBLE (reported honestly).
+              </div>
+              {(plannerResult.blockingConstraints ?? []).length > 0 && (
+                <ul className="mt-1 list-disc pl-4">
+                  {plannerResult.blockingConstraints!.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-1 opacity-80">
+                Reason codes: {(plannerResult.reasonCodes ?? []).join(", ") || "—"}
+              </div>
+            </>
+          ) : (
+            planningError
+          )}
+        </div>
+      )}
       {/* Planning Quality Dashboard (Phase 6) */}
       <div className="mb-4">
         <PlanningQualityDashboard
           metrics={qualityMetrics}
           sourceHint={
             apiSource === "live"
-              ? `FastAPI Planner · ${plannerBaseUrl() || "Online"}`
-              : "Synthetic Planning Baseline"
+              ? `CP-SAT Planner · ${apiBaseUrl()}`
+              : "Synthetic Planning Baseline (backend unreachable)"
           }
         />
       </div>
@@ -304,8 +511,8 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                 .filter((j) => j.tier === tier)
                 .sort((a, b) => a.id.localeCompare(b.id))
                 .map((j) => {
-                  const sched = recommendedPlan.assignments.find((a) => a.jobId === j.id);
-                  const def = recommendedPlan.deferred.find((d) => d.jobId === j.id);
+                  const sched = effectiveAssignments.find((a) => a.jobId === j.id);
+                  const def = sched ? undefined : seedDeferredRows.find((d) => d.jobId === j.id) ?? deferred.find((d) => d.jobId === j.id);
                   return (
                     <button
                       key={j.id}
@@ -342,19 +549,27 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
               <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">Railway timeline</div>
               <div className="text-[10px] text-[#878da1]">22:00 → 08:00 · click any bar for details</div>
             </div>
-            <div className="flex gap-1.5 font-mono text-[10px] text-[#878da1]">
-              <span>{stats.jobs} jobs</span>
-              <span>·</span>
-              <span>{stats.windowMinutes} min windows</span>
-              <span>·</span>
-              <span>{stats.utilization}% utilized</span>
+            <div className="flex items-center gap-2">
+              <div className="flex gap-1.5 font-mono text-[10px] text-[#878da1]">
+                <span>{stats.jobs} jobs</span>
+                <span>·</span>
+                <span>{stats.windowMinutes} min windows</span>
+                <span>·</span>
+                <span>{stats.utilization}% utilized</span>
+              </div>
+              <Button onClick={regenerate} disabled={planning}>
+                {planning ? "Planning…" : "Generate Plan"}
+              </Button>
             </div>
           </div>
           <TimelineLegend />
           <Timeline lanes={lanes} onPick={pick} />
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#eef0f6] pt-3">
             <span className="text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Committed resources:</span>
-            {["BCM-03 (W2)", "REMM-2 (W1)", "TW-925 (E3·W3)", "Lamp party (W1)", "OHE crews A+B"].map((r) => (
+            {(plannerResult?.resources?.length
+              ? plannerResult.resources
+              : ["BCM-03 (W2)", "REMM-2 (W1)", "TW-925 (E3·W3)", "Lamp party (W1)", "OHE crews A+B"]
+            ).map((r) => (
               <span key={r} className="rounded-full border border-[#e3e6f0] bg-[#f5f6fc] px-2 py-0.5 font-mono text-[10px] text-[#4d5468]">
                 {r}
               </span>
@@ -366,7 +581,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           <Card className="p-4">
             <div className="flex items-center justify-between">
               <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">Recommended block plan</div>
-              <span className="font-mono text-[10px] font-bold text-[#2e3092]">PLAN r3</span>
+              <span className="font-mono text-[10px] font-bold text-[#2e3092]">{planVersionLabel}</span>
             </div>
             <div className="mt-2 grid grid-cols-3 gap-2 text-center">
               <div>
@@ -432,7 +647,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                 </div>
                 <div className="divide-y divide-[#eef0f6]">
                   {selectedJobs.map((a) => {
-                    const aJob = jobById(a.jobId);
+                    const aJob = jobById(resolveJobId(a.jobId));
                     const dept = deptOf(a);
                     const resources = a.resources ?? aJob?.resources ?? [];
                     const title = a.title ?? aJob?.title;
@@ -699,7 +914,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           </div>
           <div className="divide-y divide-[#eef0f6]">
             {blockWindows.map((w) => {
-              const used = occupiedUnionOf(w.id);
+              const used = occupiedUnionOf(w.id, effectiveAssignments);
               const unused = w.minutes - used;
               return (
                 <button
@@ -723,7 +938,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
       {/* ----------------------------- DRAWERS ----------------------------- */}
       {job && <JobDrawer job={job} onClose={() => setJob(null)} />}
       {trainId && <TrainDrawer trainId={trainId} onClose={() => setTrainId(null)} />}
-      {winDrawerId && <WindowDrawer win={windowRefOf(winDrawerId)} onClose={() => setWinDrawerId(null)} />}
+      {winDrawerId && <WindowDrawer win={windowRefOf(winDrawerId, effectiveAssignments)} onClose={() => setWinDrawerId(null)} />}
       {compatId && <CompatDrawer group={compatGroups.find((g) => g.id === compatId)!} onClose={() => setCompatId(null)} />}
       {conflictSubject && (
         <ConflictDrawer entry={conflictEntries.find((c) => c.subject === conflictSubject)!} onClose={() => setConflictSubject(null)} />
@@ -744,9 +959,19 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   );
 }
 
-/** Occupied union minutes for one proposed window (from the plan assignments). */
-function occupiedUnionOf(windowId: string): number {
-  return occupiedUnion(recommendedPlan.assignments.filter((a) => a.windowId === windowId));
+/** Occupied union minutes for one window (seed id or backend block id). */
+function occupiedUnionOf(windowId: string, assignments: PlannerAssignment[]): number {
+  const direct = assignments.filter((a) => a.windowId === windowId);
+  if (direct.length) return occupiedUnion(direct);
+  const seedId = seedWindowOfBackendId(windowId);
+  return seedId ? occupiedUnion(assignments.filter((a) => a.windowId === seedId)) : 0;
+}
+
+/** True when the plan schedules at least one job inside this window. */
+function planAffectsWindow(windowId: string, assignments: PlannerAssignment[]): boolean {
+  if (assignments.some((a) => a.windowId === windowId)) return true;
+  const seedId = seedWindowOfBackendId(windowId);
+  return seedId ? assignments.some((a) => a.windowId === seedId) : false;
 }
 
 /** Workspace header — title, planning date, Tonight / Week / Month switch. */

@@ -77,8 +77,8 @@ class ScenarioEngine:
                 "title": "USFD Rail Fracture Repair",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 60,
                 "tier": 1,
                 "severity": "CRITICAL",
@@ -90,8 +90,8 @@ class ScenarioEngine:
                 "title": "Track Tamping & Lining",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "TDL-CNB",
-                "corridor_id": "TDL-CNB",
+                "corridorId": "C2",
+                "corridor_id": "C2",
                 "minutes": 80,
                 "tier": 3,
                 "severity": "MEDIUM",
@@ -104,8 +104,8 @@ class ScenarioEngine:
                 "title": "Electronic Interlocking Signal Testing",
                 "dept": "S&T",
                 "department": "S&T",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 45,
                 "tier": 2,
                 "severity": "HIGH",
@@ -117,8 +117,8 @@ class ScenarioEngine:
                 "title": "Point Machine Overhaul",
                 "dept": "S&T",
                 "department": "S&T",
-                "corridorId": "PRYJ-DDU",
-                "corridor_id": "PRYJ-DDU",
+                "corridorId": "C3",
+                "corridor_id": "C3",
                 "minutes": 60,
                 "tier": 2,
                 "severity": "HIGH",
@@ -131,8 +131,8 @@ class ScenarioEngine:
                 "title": "OHE Insulator Cleaning & Replacement",
                 "dept": "TRD",
                 "department": "TRD",
-                "corridorId": "TDL-CNB",
-                "corridor_id": "TDL-CNB",
+                "corridorId": "C2",
+                "corridor_id": "C2",
                 "minutes": 75,
                 "tier": 2,
                 "severity": "HIGH",
@@ -144,8 +144,8 @@ class ScenarioEngine:
                 "title": "Contact Wire Tension Calibration",
                 "dept": "TRD",
                 "department": "TRD",
-                "corridorId": "PRYJ-DDU",
-                "corridor_id": "PRYJ-DDU",
+                "corridorId": "C3",
+                "corridor_id": "C3",
                 "minutes": 75,
                 "tier": 3,
                 "severity": "MEDIUM",
@@ -158,7 +158,7 @@ class ScenarioEngine:
             {
                 "id": "W1",
                 "label": "NDLS–GZB (UP)",
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
                 "start": "01:00",
                 "end": "04:00",
                 "minutes": 180,
@@ -167,7 +167,7 @@ class ScenarioEngine:
             {
                 "id": "W2",
                 "label": "TDL–CNB (DOWN)",
-                "corridorId": "TDL-CNB",
+                "corridorId": "C2",
                 "start": "00:30",
                 "end": "04:30",
                 "minutes": 240,
@@ -176,7 +176,7 @@ class ScenarioEngine:
             {
                 "id": "W3",
                 "label": "PRYJ–DDU (UP)",
-                "corridorId": "PRYJ-DDU",
+                "corridorId": "C3",
                 "start": "01:00",
                 "end": "05:00",
                 "minutes": 240,
@@ -188,7 +188,7 @@ class ScenarioEngine:
             {
                 "id": "12301",
                 "name": "Howrah Rajdhani Express",
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
                 "start": "04:15",
                 "end": "04:45",
                 "isProtected": True,
@@ -196,7 +196,7 @@ class ScenarioEngine:
             {
                 "id": "12002",
                 "name": "Bhopal Shatabdi Express",
-                "corridorId": "TDL-CNB",
+                "corridorId": "C2",
                 "start": "04:45",
                 "end": "05:15",
                 "isProtected": True,
@@ -225,8 +225,8 @@ class ScenarioEngine:
                 "title": "Turnout Renewal & Deep Screening",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 45,
                 "tier": 1,
                 "severity": "CRITICAL",
@@ -238,8 +238,8 @@ class ScenarioEngine:
                 "title": "Gantry Signal Lamp & Track Circuit Renewal",
                 "dept": "S&T",
                 "department": "S&T",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 35,
                 "tier": 2,
                 "severity": "HIGH",
@@ -251,8 +251,8 @@ class ScenarioEngine:
                 "title": "OHE Section Insulator & Cantilever Overhaul",
                 "dept": "TRD",
                 "department": "TRD",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 40,
                 "tier": 2,
                 "severity": "HIGH",
@@ -266,7 +266,7 @@ class ScenarioEngine:
             {
                 "id": "W-BND-1",
                 "label": "NDLS–GZB (UP) Integrated Window",
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
                 "start": "01:00",
                 "end": "05:00",
                 "minutes": 240,
@@ -281,7 +281,7 @@ class ScenarioEngine:
                 "name": "Multi-Dept Integrated Corridor Block",
                 "status": "compatible",
                 "jobIds": ["J-ENG-BND", "J-SNT-BND", "J-TRD-BND"],
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
                 "notes": "Co-located at KM 18.2; Engineering, S&T, and TRD share unified block protection",
             }
         ]
@@ -308,8 +308,8 @@ class ScenarioEngine:
                 "title": "Rail fracture weld repair",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 90,
                 "tier": 1,
                 "severity": "CRITICAL",
@@ -320,8 +320,8 @@ class ScenarioEngine:
                 "title": "Signal lamp batch replacement",
                 "dept": "S&T",
                 "department": "S&T",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 60,
                 "tier": 2,
                 "severity": "HIGH",
@@ -332,8 +332,8 @@ class ScenarioEngine:
                 "title": "Routine trolley ultrasonic patrol",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "NDLS-GZB",
-                "corridor_id": "NDLS-GZB",
+                "corridorId": "C1",
+                "corridor_id": "C1",
                 "minutes": 60,
                 "tier": 4,
                 "severity": "LOW",
@@ -345,7 +345,7 @@ class ScenarioEngine:
             {
                 "id": "W1",
                 "label": "NDLS–GZB (UP)",
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
                 "start": "01:00",
                 "end": "04:00",
                 "minutes": 180,
@@ -360,12 +360,12 @@ class ScenarioEngine:
                     "id": "RELIEF-101",
                     "number": "RELIEF-101",
                     "name": "Relief / Special Train (Protected Path)",
-                    "corridorId": "NDLS-GZB",
+                    "corridorId": "C1",
                     "start": "02:30",
                     "end": "03:30",
                     "isProtected": True,
                 },
-                "corridorId": "NDLS-GZB",
+                "corridorId": "C1",
             },
         }
 
@@ -391,8 +391,8 @@ class ScenarioEngine:
                 "title": "Emergency Major Bridge Girder Replacement",
                 "dept": "Engineering",
                 "department": "Engineering",
-                "corridorId": "PRYJ-DDU",
-                "corridor_id": "PRYJ-DDU",
+                "corridorId": "C3",
+                "corridor_id": "C3",
                 "minutes": 300,  # Needs 300 min
                 "tier": 0,
                 "severity": "EMERGENCY",
@@ -405,7 +405,7 @@ class ScenarioEngine:
             {
                 "id": "W-INF-01",
                 "label": "PRYJ–DDU (Restricted)",
-                "corridorId": "PRYJ-DDU",
+                "corridorId": "C3",
                 "start": "01:00",
                 "end": "03:00",
                 "minutes": 120,  # Only 120 min capacity (300 min needed!)
@@ -417,7 +417,7 @@ class ScenarioEngine:
             {
                 "id": "CONCOR-BLOCK",
                 "name": "CONCOR High-Speed Freight (Protected Path)",
-                "corridorId": "PRYJ-DDU",
+                "corridorId": "C3",
                 "start": "01:00",
                 "end": "03:00",
                 "isProtected": True,  # Blocks the entire window!
@@ -521,13 +521,19 @@ class ScenarioEngine:
 
         res_dict = plan_result.to_dict()
 
-        # If bundling scenario, enrich with specific bundling innovation metrics
+        # Bundling metrics are COMPUTED from the actual plan, never asserted:
+        # baseline possessions = one window per job; actual = windows in use.
         if scenario.id == "bundling":
-            res_dict["metrics"]["combined_possessions"] = 1
-            res_dict["metrics"]["possessions_used"] = 1
-            res_dict["metrics"]["possessions_saved"] = 2
-            res_dict["metrics"]["bundled_jobs"] = len(res_dict.get("assignments", []))
-            res_dict["metrics"]["departments_integrated"] = ["Engineering", "S&T", "TRD"]
+            assignments = res_dict.get("assignments", [])
+            windows_used = {a.get("windowId") for a in assignments}
+            res_dict["metrics"]["bundled_jobs"] = len(assignments)
+            res_dict["metrics"]["possessions_used"] = len(windows_used)
+            # each job alone would need its own possession
+            res_dict["metrics"]["baseline_possessions"] = len(scenario.jobs)
+            res_dict["metrics"]["possessions_saved"] = len(scenario.jobs) - len(windows_used)
+            res_dict["metrics"]["departments_integrated"] = sorted(
+                {j.get("department") or j.get("dept") for j in scenario.jobs}
+            )
 
         return {
             "scenario_id": scenario.id,

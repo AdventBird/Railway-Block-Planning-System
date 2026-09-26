@@ -1,39 +1,120 @@
 """Google OR-Tools CP-SAT Optimization Model for Railway Block Planning.
 
-Implements the core combinatorial scheduling formulation:
-- Binary decision variables for window assignment vs deferral
-- Hard constraints: Compatibility, Isolation, Protected Trains, Resources, Section Restrictions, Possession Durations, Locked Assignments
-- Soft objectives: Priority, Maintenance completion, Train impact, Block utilization, Anti-starvation penalties
+Implements the core combinatorial scheduling formulation with REAL
+scheduling decisions (not whole-window occupancy):
+
+- x[j,w]  : job j assigned to window w (or deferred)
+- s[j,w]  : job start minute on the continuous overnight timeline
+- e[j,w]  : job end minute = start + setup + work + restore
+
+Hard constraints (rule engine and optimizer can never disagree):
+  1. Assignment exact cover  — every job is assigned once or deferred
+  2. Locked assignments      — pinned to their window; impossible locks are
+                               reported as LOCKED_ASSIGNMENT_CONFLICT, never
+                               silently moved
+  3. Corridor match          — job corridor must equal window corridor
+  4. Block type              — POWER work cannot enter a TRAFFIC-only block
+                               (and TRAFFIC work is pointless in a POWER
+                               block); POWER_AND_TRAFFIC accepts both
+  5. Window capacity         — job possession (setup+work+restore) fits
+  6. Train protection        — the job interval must sit inside one safe gap
+                               of the window after removing protected
+                               movements (temporal overlap on a continuous
+                               cross-midnight timeline)
+  7. Resource exclusivity    — shared resources cannot run overlapping
+                               intervals, even across different windows
+  8. Pairwise incompatibility— incompatible jobs never share a window;
+                               CONDITIONAL pairs run in a strict order
+                               (A finishes before B starts)
+  9. No-overlap per window   — jobs inside one window occupy disjoint
+                               intervals
+
+Soft objective (configurable, never exposed as an "AI score"):
+  maintenance completion + priority tier + train impact penalty +
+  utilization bonus + department anti-starvation penalty.
+
+Outputs carry actual job_id / window / start / end / execution mode.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from ortools.sat.python import cp_model
 
-from backend.app.services.buffer import BufferEngine
-from backend.app.services.fairness import FairnessEngine
 from backend.app.services.objective import ObjectiveBuilder
 from backend.app.services.priority import MaintenanceJob, PriorityEngine
-from backend.app.services.resources import ResourceEngine, parse_time_to_minutes, windows_overlap
+from backend.app.services.timeline import (
+    DAY_MINUTES,
+    format_minute_of_day,
+    interval_minutes,
+    minutes_from_hhmm,
+    overlaps,
+    train_protection_gaps,
+)
+
+JobLike = Union[MaintenanceJob, Dict[str, Any]]
 
 
 @dataclass
 class OptimizerSolution:
     """Structured solution returned by the CP-SAT solver."""
 
-    status: str  # "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "UNKNOWN"
-    assigned_jobs: List[Dict[str, Any]]  # [{job_id, window_id, start, end, parallel, note}]
+    status: str  # "OPTIMAL" | "FEASIBLE" | "INFEASIBLE" | "MODEL_INVALID" | "UNKNOWN"
+    assigned_jobs: List[Dict[str, Any]]  # [{jobId, windowId, start, end, ...}]
     deferred_job_ids: List[str]
     objective_value: float
     solve_time_seconds: float
-    statistics: Dict[str, Any]
+    statistics: Dict[str, Any] = field(default_factory=dict)
+    locked_conflicts: List[str] = field(default_factory=list)
+
+
+def _field(job: JobLike, *names: str, default: Any = None) -> Any:
+    for name in names:
+        if isinstance(job, dict):
+            if name in job and job[name] is not None:
+                return job[name]
+        else:
+            value = getattr(job, name, None)
+            if value is not None:
+                return value
+    return default
+
+
+def _job_id(job: JobLike) -> str:
+    return str(_field(job, "id", "job_id", "jobId", default=""))
+
+
+def _job_minutes(job: JobLike) -> int:
+    """Protected possession minutes: setup + work + restore (+ safety buffer)."""
+    work = int(_field(job, "duration_minutes", "minutes", default=0) or 0)
+    setup = int(_field(job, "setup_duration_minutes", "setup_minutes", default=0) or 0)
+    restore = int(_field(job, "restore_duration_minutes", "restore_minutes", default=0) or 0)
+    return setup + work + restore
+
+
+def _job_resources(job: JobLike) -> List[str]:
+    return [str(r).strip().lower() for r in (_field(job, "resources", default=[]) or [])]
+
+
+def _job_block_type(job: JobLike) -> str:
+    raw = _field(job, "block_type", default="")
+    if hasattr(raw, "value"):
+        raw = raw.value
+    return str(raw or "").upper()
+
+
+def _window_corridor(window: Dict[str, Any]) -> str:
+    return str(window.get("corridorId") or window.get("corridor_id") or "")
+
+
+def _window_id(window: Dict[str, Any]) -> str:
+    return str(window.get("id") or window.get("windowId") or window.get("window_id") or "")
 
 
 class CpSatOptimizer:
-    """OR-Tools CP-SAT Railway Maintenance Planner Optimizer."""
+    """OR-Tools CP-SAT railway maintenance scheduler."""
 
     def __init__(
         self,
@@ -45,182 +126,297 @@ class CpSatOptimizer:
         self.max_time_in_seconds = max_time_in_seconds
         self.deterministic_seed = deterministic_seed
 
+    # ------------------------------------------------------------------ API
+
     def optimize(
         self,
-        jobs: Sequence[Union[MaintenanceJob, Dict[str, Any]]],
+        jobs: Sequence[JobLike],
         windows: Sequence[Dict[str, Any]],
         compat_groups: Optional[Sequence[Dict[str, Any]]] = None,
         train_movements: Optional[Sequence[Dict[str, Any]]] = None,
-        locked_assignments: Optional[Dict[str, str]] = None,  # job_id -> window_id
+        locked_assignments: Optional[Dict[str, str]] = None,
         department_fairness: Optional[Dict[str, Dict[str, Any]]] = None,
+        failed_resources: Optional[Sequence[str]] = None,
     ) -> OptimizerSolution:
-        """Build and solve the CP-SAT optimization model deterministically."""
+        """Build and solve the CP-SAT model deterministically."""
         model = cp_model.CpModel()
 
-        # Clean job list and index maps
-        job_map: Dict[str, Union[MaintenanceJob, Dict[str, Any]]] = {}
-        for j in jobs:
-            j_id = str(PriorityEngine._extract_field(j, "id", "job_id", "jobId", default=""))
-            if j_id:
-                job_map[j_id] = j
-
+        job_map: Dict[str, JobLike] = {}
+        for job in jobs:
+            jid = _job_id(job)
+            if jid:
+                job_map[jid] = job
         job_ids = list(job_map.keys())
-        window_ids = [str(w.get("id") or w.get("windowId") or "") for w in windows]
-        window_map = {w_id: w for w_id, w in zip(window_ids, windows)}
 
-        if not job_ids or not window_ids:
+        window_map: Dict[str, Dict[str, Any]] = {}
+        for window in windows:
+            wid = _window_id(window)
+            if wid:
+                window_map[wid] = window
+        window_ids = list(window_map.keys())
+
+        locked_conflicts: List[str] = []
+
+        if not job_ids:
+            return OptimizerSolution("OPTIMAL", [], [], 0.0, 0.0, {}, [])
+
+        if not window_ids:
             return OptimizerSolution(
-                status="OPTIMAL" if not job_ids else "FEASIBLE",
-                assigned_jobs=[],
-                deferred_job_ids=job_ids,
-                objective_value=0.0,
-                solve_time_seconds=0.0,
-                statistics={"branches": 0, "conflicts": 0},
+                "FEASIBLE",
+                [],
+                list(job_ids),
+                0.0,
+                0.0,
+                {"branches": 0, "conflicts": 0},
+                [],
             )
 
-        # -------------------------------------------------------------------
-        # 1. Decision Variables
-        # -------------------------------------------------------------------
-        # x[j, w]: 1 if job j is assigned to window w, 0 otherwise
-        x: Dict[Tuple[str, str], cp_model.IntVar] = {}
-        for j_id in job_ids:
-            for w_id in window_ids:
-                x[(j_id, w_id)] = model.NewBoolVar(f"assign_{j_id}_{w_id}")
+        # ---------------------------------------------------------------
+        # Job properties (possession minutes, resources, block type, tier)
+        # ---------------------------------------------------------------
+        possession: Dict[str, int] = {jid: _job_minutes(job_map[jid]) for jid in job_ids}
+        resources_of: Dict[str, List[str]] = {jid: _job_resources(job_map[jid]) for jid in job_ids}
+        failed_set = {str(r).strip().lower() for r in (failed_resources or [])}
+        block_type_of: Dict[str, str] = {jid: _job_block_type(job_map[jid]) for jid in job_ids}
+        needs_power: Dict[str, bool] = {
+            jid: bool(_field(job_map[jid], "needs_power_isolation", "needsPowerIsolation", default=False))
+            for jid in job_ids
+        }
+        corridor_of: Dict[str, str] = {
+            jid: str(_field(job_map[jid], "corridor_id", "corridorId", default=""))
+            for jid in job_ids
+        }
 
-        # d[j]: 1 if job j is deferred, 0 otherwise
-        d: Dict[str, cp_model.IntVar] = {}
-        for j_id in job_ids:
-            d[j_id] = model.NewBoolVar(f"defer_{j_id}")
+        # ---------------------------------------------------------------
+        # 1. Decision variables
+        # ---------------------------------------------------------------
+        x: Dict[Tuple[str, str], Any] = {}
+        start: Dict[Tuple[str, str], Any] = {}
+        end: Dict[Tuple[str, str], Any] = {}
+        defer: Dict[str, Any] = {}
 
-        # -------------------------------------------------------------------
-        # 2. Assignment / Deferral Exact Cover Constraint
-        # Every job is either assigned to exactly one window OR deferred
-        # -------------------------------------------------------------------
-        for j_id in job_ids:
-            model.Add(sum(x[(j_id, w_id)] for w_id in window_ids) + d[j_id] == 1)
+        horizon_end = DAY_MINUTES * 2  # timeline spans two operational days
 
-        # -------------------------------------------------------------------
-        # 3. Hard Constraints
-        # -------------------------------------------------------------------
+        for jid in job_ids:
+            defer[jid] = model.NewBoolVar(f"defer_{jid}")
+            for wid in window_ids:
+                window = window_map[wid]
+                w_interval = interval_minutes(window.get("start"), window.get("end"))
+                if w_interval is None:
+                    w_start = minutes_from_hhmm(window.get("start")) or 0
+                    w_end = w_start + int(window.get("minutes") or 0)
+                else:
+                    w_start, w_end = w_interval
+                if w_end < w_start:  # never happen on continuous timeline, but stay safe
+                    w_end = w_start
+                x[(jid, wid)] = model.NewBoolVar(f"assign_{jid}_{wid}")
+                start[(jid, wid)] = model.NewIntVar(w_start, w_end, f"start_{jid}_{wid}")
+                end[(jid, wid)] = model.NewIntVar(w_start, w_end, f"end_{jid}_{wid}")
 
-        # A. Locked Assignments
-        if locked_assignments:
-            for j_id, locked_w_id in locked_assignments.items():
-                if j_id in job_ids:
-                    if locked_w_id in window_ids:
-                        model.Add(x[(j_id, locked_w_id)] == 1)
-                        model.Add(d[j_id] == 0)
-                    else:
-                        # Locked to non-existent window -> infeasible
-                        model.Add(d[j_id] == 2)  # Impossible constraint
+        # ---------------------------------------------------------------
+        # 2. Exact cover: assign to exactly one window or defer
+        # ---------------------------------------------------------------
+        for jid in job_ids:
+            model.Add(sum(x[(jid, wid)] for wid in window_ids) + defer[jid] == 1)
 
-        # Precompute job properties
-        job_durations: Dict[str, int] = {}
-        job_corridors: Dict[str, str] = {}
-        job_needs_power: Dict[str, bool] = {}
-        job_resources: Dict[str, List[str]] = {}
+        # Interval linkage: when assigned, [start, end) == [s, s+possession)
+        for jid in job_ids:
+            for wid in window_ids:
+                window = window_map[wid]
+                w_interval = interval_minutes(window.get("start"), window.get("end"))
+                if w_interval is None:
+                    w_start = minutes_from_hhmm(window.get("start")) or 0
+                    w_end = w_start + int(window.get("minutes") or 0)
+                else:
+                    w_start, w_end = w_interval
+                if w_end < w_start:
+                    w_end = w_start
+                model.Add(start[(jid, wid)] + possession[jid] == end[(jid, wid)]).OnlyEnforceIf(x[(jid, wid)])
+                model.Add(start[(jid, wid)] >= w_start).OnlyEnforceIf(x[(jid, wid)])
+                model.Add(end[(jid, wid)] <= w_end).OnlyEnforceIf(x[(jid, wid)])
 
-        for j_id, job in job_map.items():
-            job_durations[j_id] = BufferEngine.protected_duration(job)
-            job_corridors[j_id] = str(PriorityEngine._extract_field(job, "corridor_id", "corridorId", default=""))
-            job_needs_power[j_id] = bool(PriorityEngine._extract_field(job, "needs_power_isolation", "needsPowerIsolation", default=False))
-            job_resources[j_id] = [
-                r.strip().lower() for r in PriorityEngine._extract_field(job, "resources", default=[]) or []
-            ]
+        # ---------------------------------------------------------------
+        # 3. Hard per-(job, window) feasibility filters
+        # ---------------------------------------------------------------
+        for jid in job_ids:
+            # 3.0 Failed resource: the job cannot run at all this replan.
+            if failed_set and (set(resources_of[jid]) & failed_set):
+                for wid in window_ids:
+                    model.Add(x[(jid, wid)] == 0)
+                continue
+            for wid in window_ids:
+                window = window_map[wid]
+                w_interval = interval_minutes(window.get("start"), window.get("end"))
+                if w_interval is None:
+                    w_start = minutes_from_hhmm(window.get("start")) or 0
+                    w_end = w_start + int(window.get("minutes") or 0)
+                else:
+                    w_start, w_end = w_interval
 
-        # B. Corridor Matching & Isolation Capability & Train Conflicts
-        for j_id in job_ids:
-            j_corridor = job_corridors[j_id]
-            needs_power = job_needs_power[j_id]
-            prot_dur = job_durations[j_id]
-
-            for w_id in window_ids:
-                window = window_map[w_id]
-                w_corridor = str(window.get("corridorId") or window.get("corridor_id") or "")
-                w_allows_power = bool(window.get("allowsPowerIsolation") or window.get("allows_power_isolation") or False)
-                w_minutes = int(window.get("minutes") or 0)
-                w_start = parse_time_to_minutes(window.get("start") or 0)
-                w_end = parse_time_to_minutes(window.get("end") or 0)
-
-                # Corridor mismatch
-                if j_corridor and w_corridor and j_corridor != w_corridor:
-                    model.Add(x[(j_id, w_id)] == 0)
+                # 3a. Corridor match
+                if corridor_of[jid] and _window_corridor(window) and corridor_of[jid] != _window_corridor(window):
+                    model.Add(x[(jid, wid)] == 0)
                     continue
 
-                # Power isolation needed but window feed is live
-                if needs_power and not w_allows_power:
-                    model.Add(x[(j_id, w_id)] == 0)
+                # 3b. Block type hard constraint (rule engine agreement)
+                w_block_type = str(window.get("blockType") or window.get("block_type") or "").upper()
+                job_bt = block_type_of[jid]
+                if w_block_type and job_bt:
+                    if w_block_type == "TRAFFIC" and job_bt != "TRAFFIC":
+                        model.Add(x[(jid, wid)] == 0)  # POWER work under TRAFFIC-only block
+                        continue
+                    if w_block_type == "POWER" and job_bt not in ("POWER", "POWER_AND_TRAFFIC"):
+                        model.Add(x[(jid, wid)] == 0)
+                        continue
+                # 3c. Power isolation capability
+                allows_power = bool(window.get("allowsPowerIsolation") or window.get("allows_power_isolation"))
+                if needs_power[jid] and not allows_power:
+                    model.Add(x[(jid, wid)] == 0)
                     continue
 
-                # Protected job duration exceeds window capacity
-                if prot_dur > w_minutes:
-                    model.Add(x[(j_id, w_id)] == 0)
+                # 3d. Possession fits window capacity
+                if possession[jid] > (w_end - w_start):
+                    model.Add(x[(jid, wid)] == 0)
                     continue
 
-                # Protected train movements block this corridor during this window
-                if train_movements:
-                    has_train_block = False
-                    for tr in train_movements:
-                        tr_corridor = str(tr.get("corridorId") or tr.get("corridor_id") or "")
-                        if tr_corridor == w_corridor and tr.get("isProtected", True):
-                            tr_start = parse_time_to_minutes(tr.get("start") or 0)
-                            tr_end = parse_time_to_minutes(tr.get("end") or 0)
-                            if windows_overlap(w_start, w_end, tr_start, tr_end):
-                                # Train occupies window; check if remaining gap accommodates job
-                                gap_before = max(0, tr_start - w_start)
-                                gap_after = max(0, w_end - tr_end)
-                                if prot_dur > gap_before and prot_dur > gap_after:
-                                    has_train_block = True
-                                    break
-                    if has_train_block:
-                        model.Add(x[(j_id, w_id)] == 0)
+                # 3e. Train protection: job interval must fit one safe gap
+                movements = train_movements or []
+                if movements:
+                    gaps, _hits = train_protection_gaps(window, movements, _window_corridor(window))
+                    gap_starts = [g[0] for g in gaps]
+                    gap_ends = [g[1] for g in gaps]
+                    # start must fall inside a gap long enough for the job
+                    if gaps:
+                        # build a boolean per gap: job starts within this gap
+                        gap_ok = []
+                        for g_start, g_end in gaps:
+                            fits = possession[jid] <= (g_end - g_start)
+                            b = model.NewBoolVar(f"gap_{jid}_{wid}_{g_start}")
+                            model.Add(start[(jid, wid)] >= g_start).OnlyEnforceIf(b)
+                            model.Add(start[(jid, wid)] + possession[jid] <= g_end).OnlyEnforceIf(b)
+                            if fits:
+                                gap_ok.append(b)
+                            else:
+                                model.Add(b == 0)
+                        if gap_ok:
+                            model.Add(sum(gap_ok) >= 1).OnlyEnforceIf(x[(jid, wid)])
+                        else:
+                            model.Add(x[(jid, wid)] == 0)
 
-        # C. Possession Duration / Capacity per Window
-        for w_id in window_ids:
-            window = window_map[w_id]
-            w_minutes = int(window.get("minutes") or 0)
-            model.Add(
-                sum(job_durations[j_id] * x[(j_id, w_id)] for j_id in job_ids) <= w_minutes
-            )
+        # ---------------------------------------------------------------
+        # 4. Pairwise interval logic (parallel / conditional / resources)
+        # ---------------------------------------------------------------
+        # There is NO blanket NoOverlap: jobs may overlap in time only when
+        # the compatibility layer marks the pair COMPATIBLE with PARALLEL
+        # execution. Everything else is pairwise and interval-exact:
+        #   • INCOMPATIBLE pairs never share a window;
+        #   • CONDITIONAL pairs obey `first.end + handover <= second.start`
+        #     whenever both are assigned to the same window (proper
+        #     reification: enforced by the two assignment literals themselves,
+        #     never by a free Boolean the solver could set false);
+        #   • shared resources forbid overlapping JOB intervals (window
+        #     overlap alone is NOT a conflict);
+        #   • all other co-window pairs run strictly sequentially (safe
+        #     default inside one possession).
+        parallel_allowed: Set[Tuple[str, str]] = set()
+        incompatible_pairs: Set[Tuple[str, str]] = set()
+        conditional_orders: Dict[Tuple[str, str], int] = {}
+        for group in compat_groups or []:
+            status = str(group.get("status") or group.get("compatibility") or "").upper()
+            members = [str(m) for m in (group.get("jobIds") or group.get("job_ids") or [])]
+            if len(members) < 2:
+                continue
+            if status == "INCOMPATIBLE":
+                for i in range(len(members)):
+                    for k in range(i + 1, len(members)):
+                        a, b = members[i], members[k]
+                        if a in job_ids and b in job_ids:
+                            incompatible_pairs.add((a, b))
+                            incompatible_pairs.add((b, a))
+            elif status == "COMPATIBLE":
+                execution = str(group.get("execution") or "PARALLEL").upper()
+                if execution == "PARALLEL":
+                    for i in range(len(members)):
+                        for k in range(i + 1, len(members)):
+                            a, b = members[i], members[k]
+                            if a in job_ids and b in job_ids:
+                                parallel_allowed.add((a, b))
+                                parallel_allowed.add((b, a))
+            elif status == "CONDITIONAL":
+                first = str(group.get("before") or group.get("first") or members[0])
+                second = str(group.get("after") or group.get("second") or members[-1])
+                if first in job_ids and second in job_ids:
+                    conditional_orders[(first, second)] = int(group.get("handover_minutes") or 0)
 
-        # D. Work Incompatibility (e.g. from Compatibility Groups)
-        if compat_groups:
-            for cg in compat_groups:
-                status = str(cg.get("status") or "").lower()
-                cg_jobs = [str(jid) for jid in (cg.get("jobIds") or cg.get("job_ids") or [])]
-                if status == "incompatible" and len(cg_jobs) >= 2:
-                    # Mutual exclusion for all windows
-                    for i in range(len(cg_jobs)):
-                        for k in range(i + 1, len(cg_jobs)):
-                            j1, j2 = cg_jobs[i], cg_jobs[k]
-                            if j1 in job_ids and j2 in job_ids:
-                                for w_id in window_ids:
-                                    model.Add(x[(j1, w_id)] + x[(j2, w_id)] <= 1)
+        def _add_sequence_disjunction(j1: str, j2: str, wid1: str, wid2: str) -> None:
+            """When both are assigned, one job interval must precede the other.
 
-        # E. Resource Collisions (Shared Machinery, Gangs, Tower Wagons)
+            The disjunction is enforced by the assignment literals themselves
+            (`OnlyEnforceIf([x1, x2])`), so it activates exactly when both are
+            scheduled and can never be switched off by an unrelated Boolean.
+            """
+            o_ab = model.NewBoolVar(f"seq_{j1}_{j2}_{wid1}_{wid2}_ab")
+            o_ba = model.NewBoolVar(f"seq_{j1}_{j2}_{wid1}_{wid2}_ba")
+            model.Add(start[(j1, wid1)] + possession[j1] <= start[(j2, wid2)]).OnlyEnforceIf(o_ab)
+            model.Add(start[(j2, wid2)] + possession[j2] <= start[(j1, wid1)]).OnlyEnforceIf(o_ba)
+            model.AddBoolOr([o_ab, o_ba]).OnlyEnforceIf([x[(j1, wid1)], x[(j2, wid2)]])
+
         for i in range(len(job_ids)):
-            for k in range(i + 1, len(job_ids)):
-                j1, j2 = job_ids[i], job_ids[k]
-                shared_res = set(job_resources[j1]).intersection(job_resources[j2])
-                if shared_res:
-                    # Cannot share the same window concurrently
-                    for w_id in window_ids:
-                        model.Add(x[(j1, w_id)] + x[(j2, w_id)] <= 1)
+            for j2 in job_ids[i + 1 :]:
+                j1 = job_ids[i]
+                shared = set(resources_of[j1]) & set(resources_of[j2])
 
-                    # Also cannot be scheduled in different windows that overlap in absolute time
-                    for w1_id in window_ids:
-                        for w2_id in window_ids:
-                            if w1_id != w2_id:
-                                w1 = window_map[w1_id]
-                                w2 = window_map[w2_id]
-                                s1, e1 = parse_time_to_minutes(w1.get("start") or 0), parse_time_to_minutes(w1.get("end") or 0)
-                                s2, e2 = parse_time_to_minutes(w2.get("start") or 0), parse_time_to_minutes(w2.get("end") or 0)
-                                if windows_overlap(s1, e1, s2, e2):
-                                    model.Add(x[(j1, w1_id)] + x[(j2, w2_id)] <= 1)
+                # Incompatible pairs never share a window at all.
+                if (j1, j2) in incompatible_pairs:
+                    for wid in window_ids:
+                        model.Add(x[(j1, wid)] + x[(j2, wid)] <= 1)
+                    continue
 
-        # -------------------------------------------------------------------
-        # 4. Soft Objectives (Linear Combination)
-        # -------------------------------------------------------------------
+                for wid1 in window_ids:
+                    for wid2 in window_ids:
+                        if wid1 == wid2:
+                            # Conditional ordering: mandatory whenever both sit
+                            # in this window — no escape Boolean (Phase 3).
+                            if (j1, j2) in conditional_orders:
+                                handover = conditional_orders[(j1, j2)]
+                                model.Add(
+                                    end[(j1, wid1)] + handover <= start[(j2, wid1)]
+                                ).OnlyEnforceIf([x[(j1, wid1)], x[(j2, wid1)]])
+                                continue
+                            # Explicit parallel-compatible pair with no shared
+                            # resource: genuine simultaneous work is allowed.
+                            if (j1, j2) in parallel_allowed and not shared:
+                                continue
+                            # Default sequential execution inside one possession
+                            # (also covers parallel pairs that share a resource —
+                            # even compatible work cannot double-book a machine).
+                            _add_sequence_disjunction(j1, j2, wid1, wid1)
+                        elif shared:
+                            # Shared resource across DIFFERENT windows: window
+                            # overlap alone is NOT the test — the JOB intervals
+                            # must be disjoint when both are assigned (Phase 4).
+                            _add_sequence_disjunction(j1, j2, wid1, wid2)
+
+        # ---------------------------------------------------------------
+        # 6. Locked assignments — pinned, never silently moved
+        # ---------------------------------------------------------------
+        for jid, locked_wid in (locked_assignments or {}).items():
+            if jid not in job_ids:
+                continue
+            if locked_wid not in window_ids:
+                locked_conflicts.append(
+                    f"LOCKED_ASSIGNMENT_CONFLICT: job {jid} locked to window '{locked_wid}' which no longer exists."
+                )
+                continue
+            model.Add(x[(jid, locked_wid)] == 1)
+            model.Add(defer[jid] == 0)
+            # A locked job must still be feasible — if every hard filter above
+            # zeroed x[(jid, locked_wid)], the model becomes INFEASIBLE and the
+            # planner reports LOCKED_ASSIGNMENT_CONFLICT honestly.
+
+        # ---------------------------------------------------------------
+        # 7. Objective (configurable weights; not exposed as AI scores)
+        # ---------------------------------------------------------------
         matrix = self.objective_builder.build_matrix(
             list(job_map.values()),
             list(window_map.values()),
@@ -229,31 +425,27 @@ class CpSatOptimizer:
         job_coeffs = matrix["job_coefficients"]
         window_rewards = matrix["window_rewards"]
 
-        objective_terms = []
-        for j_id in job_ids:
-            # Reward for scheduling
-            for w_id in window_ids:
-                reward = window_rewards[j_id][w_id]
-                objective_terms.append(reward * x[(j_id, w_id)])
-
-            # Penalty for deferring
-            defer_cost = job_coeffs[j_id].deferral_penalty
+        objective_terms: List[Any] = []
+        for jid in job_ids:
+            for wid in window_ids:
+                reward = window_rewards[jid][wid]
+                objective_terms.append(reward * x[(jid, wid)])
+            defer_cost = job_coeffs[jid].deferral_penalty
             if defer_cost > 0:
-                objective_terms.append(-defer_cost * d[j_id])
+                objective_terms.append(-defer_cost * defer[jid])
 
         model.Maximize(sum(objective_terms))
 
-        # -------------------------------------------------------------------
-        # 5. Solve Deterministically
-        # -------------------------------------------------------------------
+        # ---------------------------------------------------------------
+        # 8. Solve deterministically (single worker, fixed seed)
+        # ---------------------------------------------------------------
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.max_time_in_seconds
         solver.parameters.random_seed = self.deterministic_seed
-        solver.parameters.num_workers = 1  # Strictly deterministic single worker
+        solver.parameters.num_workers = 1
 
         status_code = solver.Solve(model)
 
-        status_str = "UNKNOWN"
         if status_code == cp_model.OPTIMAL:
             status_str = "OPTIMAL"
         elif status_code == cp_model.FEASIBLE:
@@ -262,29 +454,45 @@ class CpSatOptimizer:
             status_str = "INFEASIBLE"
         elif status_code == cp_model.MODEL_INVALID:
             status_str = "MODEL_INVALID"
+        else:
+            status_str = "UNKNOWN"
 
         assigned_jobs: List[Dict[str, Any]] = []
         deferred_ids: List[str] = []
 
         if status_str in ("OPTIMAL", "FEASIBLE"):
-            for j_id in job_ids:
-                assigned = False
-                for w_id in window_ids:
-                    if solver.Value(x[(j_id, w_id)]) == 1:
-                        w = window_map[w_id]
-                        assigned_jobs.append({
-                            "jobId": j_id,
-                            "windowId": w_id,
-                            "start": w.get("start", "00:00"),
-                            "end": w.get("end", "00:00"),
-                            "parallel": False,
-                            "note": f"Scheduled in {w_id} ({w.get('corridorId', '')})",
-                            "resources": list(job_resources[j_id]),
-                        })
-                        assigned = True
+            for jid in job_ids:
+                placed = False
+                for wid in window_ids:
+                    if solver.Value(x[(jid, wid)]) == 1:
+                        s = solver.Value(start[(jid, wid)])
+                        e = solver.Value(end[(jid, wid)])
+                        window = window_map[wid]
+                        assigned_jobs.append(
+                            {
+                                "jobId": jid,
+                                "windowId": wid,
+                                "start": format_minute_of_day(s),
+                                "end": format_minute_of_day(e),
+                                "start_minutes": s,
+                                "end_minutes": e,
+                                "parallel": bool(
+                                    any(
+                                        solver.Value(x[(other, wid)]) == 1
+                                        for other in job_ids
+                                        if other != jid
+                                        and (jid, other) in parallel_allowed
+                                    )
+                                ),
+                                "possession_minutes": possession[jid],
+                                "note": f"Scheduled in {wid} ({_window_corridor(window)})",
+                                "resources": list(resources_of[jid]),
+                            }
+                        )
+                        placed = True
                         break
-                if not assigned:
-                    deferred_ids.append(j_id)
+                if not placed:
+                    deferred_ids.append(jid)
         else:
             deferred_ids = list(job_ids)
 
@@ -292,10 +500,11 @@ class CpSatOptimizer:
             status=status_str,
             assigned_jobs=assigned_jobs,
             deferred_job_ids=deferred_ids,
-            objective_value=solver.ObjectiveValue() if status_str in ("OPTIMAL", "FEASIBLE") else 0.0,
+            objective_value=float(solver.ObjectiveValue()) if status_str in ("OPTIMAL", "FEASIBLE") else 0.0,
             solve_time_seconds=round(solver.WallTime(), 3),
             statistics={
                 "branches": solver.NumBranches(),
                 "conflicts": solver.NumConflicts(),
             },
+            locked_conflicts=locked_conflicts,
         )

@@ -41,7 +41,11 @@ def test_evaluation_modes_run_on_identical_inputs():
 
     for mode_name, mode_res in results.items():
         assert mode_res["mode"] == mode_name
-        assert mode_res["status"] in ("OPTIMAL", "FEASIBLE")
+        # Heuristics report HEURISTIC honestly; only CP_SAT may be OPTIMAL/FEASIBLE.
+        if mode_name == "CP_SAT":
+            assert mode_res["status"] in ("OPTIMAL", "FEASIBLE", "INFEASIBLE")
+        else:
+            assert mode_res["status"] == "HEURISTIC"
         metrics = mode_res["metrics"]
         assert "jobs_completed" in metrics
         assert "critical_backlog" in metrics

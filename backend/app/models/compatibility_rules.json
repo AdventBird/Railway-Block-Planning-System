@@ -1,0 +1,89 @@
+{
+  "$comment": "Feature 11 — deterministic pairwise compatibility rules. Same corridor NEVER implies compatibility; every verdict must trace to one of these rules. CP-SAT will consume these services later, so rules stay declarative and serialisable.",
+  "version": "2026.09.1",
+  "overheads": {
+    "$comment": "Possession arithmetic overheads in minutes (Feature 13).",
+    "parallel_merge_overhead": 5,
+    "sequential_handover_overhead": 15
+  },
+  "isolation_conflicts": {
+    "$comment": "Pairs of isolation demands that cannot coexist in one possession without a certification step.",
+    "conflicting_pairs": [
+      ["POWER_ISOLATION", "EQUIPMENT_ENERGISED_TEST"]
+    ]
+  },
+  "incompatibility_rules": [
+    {
+      "id": "EXCLUSIVE_MACHINE_OCCUPANCY",
+      "description": "A machine-heavy method occupies the full track; no second party may work the same stretch.",
+      "when": {
+        "method_a": ["EXCAVATION", "GRINDING", "TAMPING"],
+        "method_b": ["ANY"]
+      },
+      "severity": "INCOMPATIBLE",
+      "reason_code": "INCOMPATIBLE_WORK"
+    },
+    {
+      "id": "EXCAVATION_OVER_BURIED_SERVICES",
+      "description": "Excavation over cable ducts forbids any S&T access to the same stretch.",
+      "when": {
+        "method_a": ["EXCAVATION"],
+        "method_b": ["DUCT_ACCESS"]
+      },
+      "severity": "INCOMPATIBLE",
+      "reason_code": "INCOMPATIBLE_WORK"
+    },
+    {
+      "id": "CONFLICTING_ISOLATION",
+      "description": "One job de-energises the OHE while the other needs it energised for testing.",
+      "when": {
+        "isolation_pair": ["POWER_ISOLATION", "EQUIPMENT_ENERGISED_TEST"]
+      },
+      "severity": "CONDITIONAL",
+      "reason_code": "ISOLATION_CONFLICT"
+    }
+  ],
+  "conditional_rules": [
+    {
+      "id": "SHARED_MACHINE_SEQUENTIAL",
+      "description": "Jobs sharing a machine must run strictly one after the other with a handover.",
+      "when": {
+        "shared_resource_class": "MACHINE"
+      },
+      "execution": "SEQUENTIAL",
+      "reason_code": "RESOURCE_CONFLICT"
+    },
+    {
+      "id": "ISOLATION_CERTIFICATION",
+      "description": "After power is restored the dispatcher must certify the feed before energised testing.",
+      "when": {
+        "isolation_pair": ["POWER_ISOLATION", "EQUIPMENT_ENERGISED_TEST"]
+      },
+      "execution": "SEQUENTIAL",
+      "reason_code": "ISOLATION_CONFLICT"
+    }
+  ],
+  "parallel_rules": [
+    {
+      "id": "NON_INTERACTING_METHODS",
+      "description": "Line-side / non-exclusive methods may work the same protection in parallel.",
+      "when": {
+        "method_intersection": false,
+        "no_shared_exclusive_resource": true,
+        "isolation_compatible": true
+      },
+      "execution": "PARALLEL"
+    }
+  ],
+  "method_classification": {
+    "$comment": "Coarse work-method classification used by the rules above.",
+    "EXCLUSIVE": ["EXCAVATION", "GRINDING", "TAMPING", "OHE_WORK"],
+    "TESTING": ["SIGNALLING_TEST"],
+    "BENIGN": ["PATROL", "INSPECTION", "LAMP", "LUBRICATION", "MARKING", "WALKDOWN", "VEGETATION", "WELD", "DUCT_ACCESS"]
+  },
+  "isolation_demand": {
+    "$comment": "How each job attribute translates into an isolation demand tag.",
+    "power_isolation_required": "POWER_ISOLATION",
+    "energised_testing": "EQUIPMENT_ENERGISED_TEST"
+  }
+}

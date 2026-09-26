@@ -157,6 +157,7 @@ class ReplanningEngine:
             str(d.get("jobId") or d.get("job_id")): d
             for d in c_dict.get("deferred_jobs", [])
         }
+        failed_resources: List[str] = []
 
         # 2. Extract Event details
         event_dict = event if isinstance(event, dict) else getattr(event, "__dict__", {})
@@ -173,11 +174,27 @@ class ReplanningEngine:
 
         # 3. Apply Event Transformations
         if event_type == EventType.SPECIAL_TRAIN.value:
-            # Add or update protected train movement
+            # Add or update protected train movement — exactly once.
             new_train = payload.get("train") or payload
             if new_train:
                 new_train["isProtected"] = True
-                trains_copy.append(new_train)
+                new_id = str(new_train.get("id") or new_train.get("trainId") or new_train.get("number") or "")
+                duplicate = False
+                for t in trains_copy:
+                    t_id = str(t.get("id") or t.get("number") or "")
+                    # Same id, or identical corridor+start+end already present.
+                    if new_id and t_id == new_id:
+                        duplicate = True
+                        break
+                    if (
+                        str(t.get("corridorId") or "") == str(new_train.get("corridorId") or "")
+                        and str(t.get("start") or "") == str(new_train.get("start") or "")
+                        and str(t.get("end") or "") == str(new_train.get("end") or "")
+                    ):
+                        duplicate = True
+                        break
+                if not duplicate:
+                    trains_copy.append(new_train)
 
         elif event_type == EventType.TRAIN_CANCELLED.value:
             # Remove train from timetable
@@ -185,17 +202,20 @@ class ReplanningEngine:
             trains_copy = [t for t in trains_copy if str(t.get("id") or t.get("number")) != train_id]
 
         elif event_type == EventType.RESOURCE_FAILURE.value:
-            # Mark resource as failed/unavailable
+            # Resource failure: report the failure honestly per affected job
+            # via reason codes. NEVER corrupt job corridor ids — the corridor
+            # is a canonical reference and must stay intact.
             failed_res = str(payload.get("resource") or payload.get("resource_id") or "").strip().lower()
-            # Invalidate jobs needing this resource
-            for j in jobs_copy:
-                j_res = [r.lower() for r in (PriorityEngine._extract_field(j, "resources", default=[]) or [])]
-                if failed_res in j_res:
-                    # Clear corridor so it cannot find a matching window or trigger conflict
-                    if isinstance(j, dict):
-                        j["corridorId"] = "OUT_OF_SERVICE_RESOURCE"
-                    elif hasattr(j, "corridor_id"):
-                        j.corridor_id = "OUT_OF_SERVICE_RESOURCE"
+            if failed_res:
+                failed_resources.append(failed_res)
+                for j in jobs_copy:
+                    j_res = [r.lower() for r in (PriorityEngine._extract_field(j, "resources", default=[]) or [])]
+                    if failed_res in j_res:
+                        if isinstance(j, dict):
+                            j.setdefault("failed_resources", []).append(failed_res)
+                            j["resource_failed"] = True
+                        elif hasattr(j, "resource_failed"):
+                            j.resource_failed = True
 
         elif event_type == EventType.EMERGENCY_JOB.value:
             # Insert emergency job (Tier 0)
@@ -252,6 +272,7 @@ class ReplanningEngine:
             train_movements=trains_copy,
             locked_assignments=locked_copy,
             supported_departments=supported_departments,
+            failed_resources=failed_resources,
         )
 
         new_dict = new_plan_result.to_dict()

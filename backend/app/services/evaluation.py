@@ -442,7 +442,9 @@ class EvaluationEngine:
 
         return ModeEvaluationResult(
             mode=mode_name,
-            status="OPTIMAL" if not deferred else "FEASIBLE",
+            # Heuristics are HEURISTIC, never OPTIMAL — only CP-SAT may claim
+            # optimality, and only when the solver proves it.
+            status="HEURISTIC" if not deferred else "HEURISTIC",
             assignments=assignments,
             deferred_jobs=deferred,
             metrics=metrics.to_dict(),
@@ -492,14 +494,26 @@ class EvaluationEngine:
                 if tier in (Tier.TIER_0, Tier.TIER_1):
                     critical_completed += 1
 
-        # Total window minutes & occupied minutes
+        # Total window minutes & occupied minutes (interval-union per window:
+        # parallel jobs overlap once, never double-counted — Feature 30).
+        from collections import defaultdict
+
+        from backend.app.services.timeline import union_minutes
+
         total_window_mins = sum(int(w.get("minutes") or 0) for w in windows)
-        occupied_minutes = 0
+        intervals_by_window: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
         for a in assignments:
-            a_id = str(a.get("jobId") or a.get("job_id") or "")
-            if a_id in job_map:
-                duration = int(PriorityEngine._extract_field(job_map[a_id], "duration_minutes", "minutes", default=0))
-                occupied_minutes += duration
+            w_id = str(a.get("windowId") or a.get("window_id") or "")
+            s = a.get("start_minutes")
+            e = a.get("end_minutes")
+            if s is None or e is None:
+                a_id = str(a.get("jobId") or a.get("job_id") or "")
+                duration = 0
+                if a_id in job_map:
+                    duration = int(PriorityEngine._extract_field(job_map[a_id], "duration_minutes", "minutes", default=0))
+                s, e = 0, duration
+            intervals_by_window[w_id].append((int(s), int(e)))
+        occupied_minutes = sum(union_minutes(ivs) for ivs in intervals_by_window.values())
 
         unused_minutes = max(0, total_window_mins - occupied_minutes)
         block_utilization = (

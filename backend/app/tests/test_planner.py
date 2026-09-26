@@ -110,12 +110,14 @@ def test_scenario_3_train_conflict():
 
 
 def test_scenario_4_resource_conflict():
-    """Scenario 4: Tower Wagon overlap creates RESOURCE_CONFLICT and defers the lower-priority job."""
+    """Tower wagon shared by two jobs in a 90-min window: the resource cannot
+    run them concurrently and they cannot both fit sequentially, so the
+    lower-priority job is deferred with RESOURCE_CONFLICT."""
     planner = Planner()
 
-    # One window of 120 min on C1
+    # One window of 90 min on C1: 60+60 sequential does NOT fit.
     windows = [
-        {"id": "W1", "corridorId": "C1", "minutes": 120, "start": "01:00", "end": "03:00"},
+        {"id": "W1", "corridorId": "C1", "minutes": 90, "start": "01:00", "end": "02:30"},
     ]
 
     job_high = MaintenanceJob(
@@ -144,6 +146,30 @@ def test_scenario_4_resource_conflict():
     deferred = result.deferred_jobs[0]
     assert deferred["jobId"] == "J-LOW"
     assert REASON_RESOURCE_CONFLICT in deferred["reason_codes"]
+
+
+def test_shared_resource_runs_sequentially_when_time_allows():
+    """With real interval placement a shared resource can serve two jobs
+    back-to-back inside one window (60+60 <= 120) — no conflict."""
+    planner = Planner()
+    windows = [
+        {"id": "W1", "corridorId": "C1", "minutes": 120, "start": "01:00", "end": "03:00"},
+    ]
+    job_high = MaintenanceJob(
+        id="J-HIGH", corridor_id="C1", duration_minutes=60,
+        resources=["Tower wagon TW-925"], tier=Tier.TIER_1,
+    )
+    job_low = MaintenanceJob(
+        id="J-LOW", corridor_id="C1", duration_minutes=60,
+        resources=["Tower wagon TW-925"], tier=Tier.TIER_3,
+    )
+
+    result = planner.solve(jobs=[job_high, job_low], windows=windows)
+
+    assert len(result.assignments) == 2
+    # intervals must be disjoint
+    a1, a2 = result.assignments
+    assert int(a2["end_minutes"]) <= int(a1["start_minutes"]) or int(a1["end_minutes"]) <= int(a2["start_minutes"])
 
 
 def test_scenario_5_deterministic_output():

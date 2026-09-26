@@ -1,0 +1,96 @@
+{
+  "$comment": "Operating timetable for the planning night 22:00-08:00. Deliberately different vocabulary: train_id/train_type/corridor/entry_time/exit_time/protected. Protected paths must never be regulated.",
+  "extracted_at": "2026-09-14T18:10:00+05:30",
+  "records": [
+    {
+      "train_id": "TT-12951",
+      "train_number": "12951",
+      "train_type": "passenger",
+      "corridor": "NDLS-GZB",
+      "entry_time": "22:50",
+      "exit_time": "23:50",
+      "protected": true,
+      "note": "Mumbai Rajdhani - protect path"
+    },
+    {
+      "train_id": "TT-12313",
+      "train_number": "12313",
+      "train_type": "passenger",
+      "corridor": "NDLS-GZB",
+      "entry_time": "23:55",
+      "exit_time": "00:55",
+      "protected": true,
+      "note": "Sealdah Rajdhani - protect path"
+    },
+    {
+      "train_id": "TT-47012",
+      "train_number": "BCNA-47012",
+      "train_type": "freight",
+      "corridor": "TDL-CNB",
+      "entry_time": "00:40",
+      "exit_time": "02:10",
+      "protected": false,
+      "note": "BOXN goods"
+    },
+    {
+      "train_id": "TT-2210",
+      "train_number": "CONCOR-2210",
+      "train_type": "freight",
+      "corridor": "PRYJ-DDU",
+      "entry_time": "03:20",
+      "exit_time": "04:40",
+      "protected": false,
+      "note": "Double-stack container"
+    },
+    {
+      "train_id": "TT-882",
+      "train_number": "FT-882",
+      "train_type": "freight",
+      "corridor": "NDLS-GZB",
+      "entry_time": "05:15",
+      "exit_time": "06:00",
+      "protected": false,
+      "note": "Port clearance freight"
+    },
+    {
+      "train_id": "TT-02612",
+      "train_number": "02612",
+      "train_type": "special",
+      "corridor": "GZB-ALJN",
+      "entry_time": "02:30",
+      "exit_time": "05:00",
+      "protected": true,
+      "note": "VIP special (SECURE)"
+    },
+    {
+      "train_id": "TT-903",
+      "train_number": "FT-903",
+      "train_type": "freight",
+      "corridor": "TDL-CNB",
+      "entry_time": "05:45",
+      "exit_time": "06:30",
+      "protected": false,
+      "note": "Rake placement CNB yard"
+    },
+    {
+      "train_id": "TT-12962",
+      "train_number": "12962",
+      "train_type": "passenger",
+      "corridor": "DDU-BSB",
+      "entry_time": "05:30",
+      "exit_time": "06:20",
+      "protected": false,
+      "note": "Intercity - first path after OHE block ends"
+    },
+    {
+      "train_id": "TT-BAD1",
+      "train_number": "00000",
+      "train_type": "cargo",
+      "corridor": "ZZZ-XXX",
+      "entry_time": "99:99",
+      "exit_time": "",
+      "protected": "maybe",
+      "note": "Malformed timetable row used to exercise validation"
+    }
+  ]
+}

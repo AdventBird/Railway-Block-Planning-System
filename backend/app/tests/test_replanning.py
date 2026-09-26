@@ -291,13 +291,18 @@ def test_replan_operational_restriction_event():
 # Feature 20: Emergency Insertion Tests
 # ---------------------------------------------------------------------------
 def test_emergency_insertion_workflow():
-    """Emergency job receives Tier 0 precedence, displacing routine work while respecting locked jobs."""
+    """Emergency job receives Tier 0 precedence, displacing routine work while respecting locked jobs.
+
+    Capacity is tight: locked 40 + emergency 70 = 110 min in a 120-min
+    window, so the emergency and the locked job fit but the routine job is
+    displaced — displacement computed by CP-SAT, not asserted.
+    """
     planner = Planner(plan_version="r1")
 
     job_locked = MaintenanceJob(id="J-LOCKED", corridor_id="C1", duration_minutes=40, tier=Tier.TIER_2)
     job_routine = MaintenanceJob(id="J-ROUTINE", corridor_id="C1", duration_minutes=50, tier=Tier.TIER_3)
 
-    windows = [{"id": "W1", "corridorId": "C1", "minutes": 180}]
+    windows = [{"id": "W1", "corridorId": "C1", "minutes": 120}]
     locked = {"J-LOCKED": "W1"}
 
     base_plan = planner.solve(
