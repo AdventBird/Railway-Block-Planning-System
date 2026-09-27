@@ -18,6 +18,7 @@ import {
   trains,
 } from "../data/opsData";
 import { jobById, jobs, type Job } from "../data/jobsData";
+import { seedJobOfBackendId } from "../data/idMap";
 import {
   conflictEntries,
   conflictNext,
@@ -33,9 +34,11 @@ import type {
   PlannerApiStatus,
   PlannerAssignment,
   PlannerMetrics,
+  PlannerObjectiveMode,
   PlannerResult,
   PlannerSource,
   PlannerStatus,
+  PlannerTier,
   PlannerWindowStatus,
   ReplanEvent,
   ReplanResult,
@@ -97,6 +100,17 @@ const pickBoolean = (record: UnknownRecord, ...keys: string[]): boolean | undefi
   return undefined;
 };
 
+/** Tier 0–4 from a backend record (null-safe — the canonical tier may be set). */
+function pickTier(record: UnknownRecord): PlannerTier | undefined {
+  for (const key of ["tier", "priority_tier"]) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 4) {
+      return value as PlannerTier;
+    }
+  }
+  return undefined;
+}
+
 const pickStringList = (record: UnknownRecord, ...keys: string[]): string[] | undefined => {
   for (const key of keys) {
     const value = record[key];
@@ -117,8 +131,9 @@ const pickReasonCodes = (record: UnknownRecord): ReasonCode[] | undefined => {
   return typeof raw === "string" ? [raw as ReasonCode] : undefined;
 };
 
-/** Accepts backend snake_case (`job_id`) or camelCase; drops unplaceable rows. */
-function normalizeAssignments(payload: unknown): PlannerAssignment[] {
+/** Accepts backend snake_case (`job_id`) or camelCase; drops unplaceable rows.
+ *  Exported for unit tests (frontend/src/api/planner.test.ts). */
+export function normalizeAssignments(payload: unknown): PlannerAssignment[] {
   if (!Array.isArray(payload)) return [];
   const out: PlannerAssignment[] = [];
   for (const entry of payload) {
@@ -138,6 +153,14 @@ function normalizeAssignments(payload: unknown): PlannerAssignment[] {
       parallel: pickBoolean(record, "parallel"),
       note: pickText(record, "note"),
       possessionMinutes: pickNumber(record, "possession_minutes", "possessionMinutes"),
+      /* Backend-authored context (preferred over the seed catalogue). */
+      title: pickText(record, "title"),
+      department: pickText(record, "department"),
+      tier: pickTier(record),
+      tierReason: pickText(record, "tierReason", "tier_reason"),
+      corridorId: pickText(record, "corridorId", "corridor_id"),
+      minutes: pickNumber(record, "duration_minutes", "minutes"),
+      resources: pickStringList(record, "resources"),
     });
   }
   return out;
@@ -157,6 +180,14 @@ function normalizeDeferredJobs(payload: unknown): DeferredJob[] {
       reason: pickText(record, "reason", "explanation") ?? "Deferred by the planner.",
       reasonCodes: codes,
       blockingConstraints: pickStringList(record, "blocking_constraints", "blockingConstraints"),
+      /* Backend-authored context (preferred over the seed catalogue). */
+      title: pickText(record, "title"),
+      department: pickText(record, "department"),
+      tier: pickTier(record),
+      tierReason: pickText(record, "tierReason", "tier_reason"),
+      corridorId: pickText(record, "corridorId", "corridor_id"),
+      minutes: pickNumber(record, "duration_minutes", "minutes"),
+      resources: pickStringList(record, "resources"),
     });
   }
   return out;
@@ -180,7 +211,9 @@ function normalizeInfeasible(record: UnknownRecord, result: PlannerResult): void
 const seedAssignmentContext = (
   jobId: string
 ): Pick<PlannerAssignment, "title" | "department" | "tier" | "corridorId" | "minutes" | "resources"> => {
-  const job = jobById(jobId);
+  // Backend ids first (the live plan is the CP-SAT result); fall back through
+  // the documented id bridge for seeded demo ids (§46 — one canonical world).
+  const job = jobById(jobId) ?? jobById(seedJobOfBackendId(jobId) ?? "");
   return {
     title: job?.title,
     department: job?.dept,
@@ -199,7 +232,8 @@ function enrichAssignments(list: PlannerAssignment[]): PlannerAssignment[] {
 /** Add title / tier / explanation / next opportunity to deferred rows. */
 function enrichDeferred(list: DeferredJob[]): DeferredJob[] {
   return list.map((entry) => {
-    const job: Job | undefined = jobById(entry.jobId);
+    const job: Job | undefined =
+      jobById(entry.jobId) ?? jobById(seedJobOfBackendId(entry.jobId) ?? "");
     const narration = conflictEntries.find(
       (conflict) => conflict.code === entry.code && conflict.subject.startsWith(entry.jobId)
     );
@@ -380,16 +414,17 @@ function isPlannerPayload(value: unknown): boolean {
 }
 
 /**
- * getPlannerResult()
- * Runs the REAL CP-SAT planner (POST /api/planner/run). When the backend is
- * unreachable, resolves to the synthetic plan with a fallback source marker.
- * Never rejects — the UI decides how to render `source`.
+ * getPlannerResult(mode)
+ * Runs the REAL CP-SAT planner (POST /api/planner/run) under the requested
+ * objective profile (SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST). When the
+ * backend is unreachable, resolves to the synthetic plan with a fallback
+ * source marker. Never rejects — the UI decides how to render `source`.
  */
-export async function getPlannerResult(): Promise<PlannerResult> {
+export async function getPlannerResult(mode: PlannerObjectiveMode = "BALANCED"): Promise<PlannerResult> {
   const endpoint = ENDPOINTS.plannerRun;
   if (isBackendConfigured()) {
     try {
-      const payload = await apiPost<unknown>(endpoint, { mode: "BALANCED" });
+      const payload = await apiPost<unknown>(endpoint, { mode });
       if (isPlannerPayload(payload)) {
         const record = asRecord(payload);
         const assignments = normalizeAssignments(record.assignments);
@@ -398,6 +433,7 @@ export async function getPlannerResult(): Promise<PlannerResult> {
           version: pickText(record, "plan_version", "version") ?? PLAN_VERSION,
           date: PLAN_DATE,
           status: (pickText(record, "status") as PlannerStatus | undefined) ?? "FEASIBLE",
+          mode: (pickText(record, "mode") as PlannerObjectiveMode | undefined) ?? mode,
           assignments: enrichAssignments(assignments),
           deferred,
           trainImpact:
@@ -435,6 +471,68 @@ export async function getPlannerResult(): Promise<PlannerResult> {
     : "No backend configured — synthetic dataset in use.";
   setSource("fallback", endpoint, message);
   return buildSyntheticPlannerResult({ status: "fallback", endpoint, message });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Feature 18 — objective-mode alternatives (same input, three weight sets)   */
+/* -------------------------------------------------------------------------- */
+
+/** Factual per-mode summary — the UI never declares a winner. */
+export interface PlannerModeComparisonRow {
+  status?: string;
+  scheduled?: number;
+  deferred?: number;
+  utilization?: number;
+  trainImpactCount?: number;
+}
+
+export interface PlannerAlternatives {
+  /** Per-mode factual comparison rows (may be absent when the backend is down). */
+  comparison: Partial<Record<PlannerObjectiveMode, PlannerModeComparisonRow>>;
+  source: PlannerSource;
+}
+
+/** The three objective weight profiles the backend supports. */
+export const OBJECTIVE_MODES: PlannerObjectiveMode[] = [
+  "SAFETY_FIRST",
+  "BALANCED",
+  "PUNCTUALITY_FIRST",
+];
+
+/**
+ * POST /api/planner/alternatives — the SAME canonical world solved under all
+ * three objective profiles. Factual metrics only.
+ */
+export async function getPlannerAlternatives(): Promise<PlannerAlternatives> {
+  const endpoint = ENDPOINTS.plannerAlternatives;
+  if (!isBackendConfigured()) {
+    return { comparison: {}, source: { status: "fallback", endpoint, message: "No backend configured." } };
+  }
+  try {
+    const payload = await apiPost<unknown>(endpoint, {});
+    const record = asRecord(payload);
+    const comparisonRecord = asRecord(record.comparison);
+    const comparison: Partial<Record<PlannerObjectiveMode, PlannerModeComparisonRow>> = {};
+    for (const mode of OBJECTIVE_MODES) {
+      const row = asRecord(comparisonRecord[mode]);
+      if (row && Object.keys(row).length > 0) {
+        comparison[mode] = {
+          status: pickText(row, "status"),
+          scheduled: pickNumber(row, "scheduled"),
+          deferred: pickNumber(row, "deferred"),
+          utilization: pickNumber(row, "utilization"),
+          trainImpactCount: pickNumber(row, "train_impact_count", "trainImpactCount"),
+        };
+      }
+    }
+    return { comparison, source: setSource("live", endpoint) };
+  } catch (error) {
+    const message =
+      error instanceof ApiError
+        ? `Objective-mode comparison unavailable. (${error.code})`
+        : "Objective-mode comparison unavailable.";
+    return { comparison: {}, source: { status: "fallback", endpoint, message } };
+  }
 }
 
 /**

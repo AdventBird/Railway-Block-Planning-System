@@ -40,6 +40,9 @@ export type PlannerStatus =
   | "MODEL_INVALID"
   | "UNKNOWN";
 
+/** Objective weight profile (Feature 18) — backend-supported modes. */
+export type PlannerObjectiveMode = "SAFETY_FIRST" | "BALANCED" | "PUNCTUALITY_FIRST";
+
 /* -------------------------------------------------------------------------- */
 /* Response status                                                            */
 /* -------------------------------------------------------------------------- */
@@ -83,6 +86,8 @@ export interface PlannerAssignment {
   title?: string;
   department?: PlannerDepartment | string;
   tier?: PlannerTier;
+  /** One-line, score-free tier justification (backend-authored). */
+  tierReason?: string;
   corridorId?: string;
   /** Duration the job itself needs, independent of the window it sits in. */
   minutes?: number;
@@ -99,6 +104,8 @@ export interface DeferredJob {
   title?: string;
   department?: PlannerDepartment | string;
   tier?: PlannerTier;
+  /** One-line, score-free tier justification (backend-authored). */
+  tierReason?: string;
   corridorId?: string;
   minutes?: number;
   resources?: string[];
@@ -188,6 +195,8 @@ export interface PlannerResult {
   date?: string;
   /** Solver verdict from the backend (OPTIMAL/FEASIBLE/INFEASIBLE/…). */
   status?: PlannerStatus;
+  /** Objective profile the plan was solved under (Feature 18). */
+  mode?: PlannerObjectiveMode;
   assignments: PlannerAssignment[];
   deferred: DeferredJob[];
   affectedTrain?: string[];

@@ -22,6 +22,7 @@ from backend.app.schemas import (
     ValidationMessage,
 )
 from backend.app.services.ingestion import IngestionResult
+from backend.app.services.priority import PriorityEngine
 from backend.app.services.repository import WorldRepository
 
 
@@ -469,6 +470,13 @@ def _job_payload(
     section = _find_section(world, job)
     line_verdict = line_rules.check(job, section)
     data = json_safe(job)
+    # Tier 0-4 is the user-facing priority representation (Feature 6): the
+    # canonical register stores it as null; the engine computes it from the
+    # normalised categorical attributes on read — never a numeric score.
+    if data.get("tier") is None:
+        data["tier"] = PriorityEngine.assign_tier(job)
+    if not data.get("tier_reason"):
+        data["tier_reason"] = PriorityEngine.tier_summary(job)
     data["feasible_block_types"] = [
         b.value for b in block_rules.feasible_block_types(job)
     ]

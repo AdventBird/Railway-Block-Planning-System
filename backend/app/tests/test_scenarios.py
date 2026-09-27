@@ -14,11 +14,11 @@ from backend.app.services.scenarios import ScenarioEngine
 
 
 def test_scenario_list_catalog():
-    """Verify list_scenarios provides metadata for all four canonical scenarios."""
+    """Verify list_scenarios provides metadata for all five canonical scenarios."""
     scenarios = ScenarioEngine.list_scenarios()
-    assert len(scenarios) == 4
+    assert len(scenarios) == 5
     ids = {s["id"] for s in scenarios}
-    assert ids == {"normal", "bundling", "live_event", "infeasible"}
+    assert ids == {"normal", "bundling", "live_event", "infeasible", "mode_tradeoff"}
 
 
 def test_scenario_1_normal_planning():

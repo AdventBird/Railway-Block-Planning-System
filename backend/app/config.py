@@ -80,3 +80,10 @@ API_TITLE: str = "Railway Block Planning System — Domain API"
 API_VERSION: str = "0.1.0"
 API_HOST: str = os.getenv("RBPS_API_HOST", "127.0.0.1")
 API_PORT: int = int(os.getenv("RBPS_API_PORT", "8000"))
+
+#: CORS allowlist. The demo serves the frontend from several local origins
+#: (vite dev :5173, vite preview :4173, serve.mjs :5252) — any localhost port
+#: is accepted; override the regex for other deployments.
+CORS_ORIGIN_REGEX: str = os.getenv(
+    "RBPS_CORS_ORIGIN_REGEX", r"http://(localhost|127\.0\.0\.1):\d+"
+)

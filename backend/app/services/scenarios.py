@@ -441,6 +441,82 @@ class ScenarioEngine:
         )
 
     # -----------------------------------------------------------------------
+    # Scenario 5: Mode Trade-off (Feature 18)
+    # -----------------------------------------------------------------------
+    @classmethod
+    def get_mode_tradeoff_scenario(cls) -> ScenarioDefinition:
+        """Deterministic trade-off dataset where objective weights measurably move the plan.
+
+        Same corridor, two windows: a quiet window (no affected movements) and
+        a busy window (one affected freight path). The quiet window fits only
+        ONE of the two jobs, so PUNCTUALITY_FIRST (which pays heavily for the
+        affected movement) defers the routine job, while SAFETY_FIRST /
+        BALANCED accept the freight regulation and schedule both.
+        """
+        jobs = [
+            {
+                "id": "J-TRD-HI",
+                "title": "OHE regulated tension adjustment (Tier 1)",
+                "dept": "TRD",
+                "department": "TRD",
+                "corridorId": "C9",
+                "corridor_id": "C9",
+                "minutes": 60,
+                "tier": 1,
+                "severity": "CRITICAL",
+                "resources": ["Tower wagon TW-410", "OHE crew A"],
+                "needsPowerIsolation": False,
+            },
+            {
+                "id": "J-SNT-LO",
+                "title": "Point machine routine patrol (Tier 4)",
+                "dept": "S&T",
+                "department": "S&T",
+                "corridorId": "C9",
+                "corridor_id": "C9",
+                "minutes": 45,
+                "tier": 4,
+                "severity": "MINOR",
+                "resources": ["S&T patrol kit"],
+                "needsPowerIsolation": False,
+            },
+        ]
+
+        windows = [
+            {
+                "id": "WT-QUIET",
+                "label": "TDL–CNB quiet gap",
+                "corridorId": "C9",
+                "start": "00:30",
+                "end": "02:00",
+                "minutes": 90,
+                "allowsPowerIsolation": True,
+                "affectedTrains": [],
+                "affected_trains": [],
+            },
+            {
+                "id": "WT-BUSY",
+                "label": "TDL–CNB (freight path inside)",
+                "corridorId": "C9",
+                "start": "00:30",
+                "end": "03:00",
+                "minutes": 150,
+                "allowsPowerIsolation": True,
+                "affectedTrains": [{"number": "BCNA-47012", "type": "freight"}],
+                "affected_trains": [{"number": "BCNA-47012", "type": "freight"}],
+            },
+        ]
+
+        return ScenarioDefinition(
+            id="mode_tradeoff",
+            name="Objective Mode Trade-off",
+            description="Same input solved under SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST — factual weight sensitivity, no winner declared.",
+            category="BASELINE",
+            jobs=jobs,
+            windows=windows,
+        )
+
+    # -----------------------------------------------------------------------
     # Catalog and Execution Dispatch
     # -----------------------------------------------------------------------
     @classmethod
@@ -451,6 +527,7 @@ class ScenarioEngine:
             cls.get_bundling_scenario().to_metadata(),
             cls.get_live_event_scenario().to_metadata(),
             cls.get_infeasible_scenario().to_metadata(),
+            cls.get_mode_tradeoff_scenario().to_metadata(),
         ]
 
     @classmethod
@@ -465,7 +542,11 @@ class ScenarioEngine:
             return cls.get_live_event_scenario()
         elif sid in ("infeasible", "conflict", "s4", "trust"):
             return cls.get_infeasible_scenario()
-        raise ValueError(f"Unknown scenario_id: '{scenario_id}'. Available: normal, bundling, live_event, infeasible")
+        elif sid in ("mode_tradeoff", "alternatives", "s5", "tradeoff"):
+            return cls.get_mode_tradeoff_scenario()
+        raise ValueError(
+            f"Unknown scenario_id: '{scenario_id}'. Available: normal, bundling, live_event, infeasible, mode_tradeoff"
+        )
 
     @classmethod
     def run_scenario(cls, scenario_id: str) -> Dict[str, Any]:
@@ -509,7 +590,54 @@ class ScenarioEngine:
                 "reason_codes": replanning_result.reason_codes,
             }
 
-        # 2. Standard, Bundling, or Infeasible Scenarios
+        # 2. Mode Trade-off Scenario (Feature 18) — the SAME input solved
+        # under all three objective profiles. Facts only: no mode is
+        # declared the winner; officers see how the weights move the plan.
+        if scenario.id == "mode_tradeoff":
+            alternatives = ReplanningEngine.generate_alternatives(
+                jobs=scenario.jobs,
+                windows=scenario.windows,
+                compat_groups=scenario.compat_groups,
+                train_movements=scenario.train_movements,
+                locked_assignments=scenario.locked_assignments,
+            )
+            comparison = {
+                mode: {
+                    "status": res.get("status"),
+                    "scheduled": res.get("metrics", {}).get("scheduled"),
+                    "deferred": res.get("metrics", {}).get("deferred"),
+                    "utilization": res.get("metrics", {}).get("utilization"),
+                    "train_impact_count": len(res.get("train_impacts", []) or []),
+                }
+                for mode, res in alternatives.items()
+            }
+            statuses = [res.get("status") for res in alternatives.values()]
+            if all(s == "OPTIMAL" for s in statuses):
+                overall = "OPTIMAL"
+            elif any(s == "INFEASIBLE" for s in statuses):
+                overall = "INFEASIBLE"
+            else:
+                overall = "FEASIBLE"
+            return {
+                "scenario_id": scenario.id,
+                "metadata": scenario.to_metadata(),
+                "status": overall,
+                "version": "r1",
+                "input": {
+                    "jobs": scenario.jobs,
+                    "windows": scenario.windows,
+                    "train_movements": scenario.train_movements,
+                    "compat_groups": scenario.compat_groups,
+                },
+                "alternatives": alternatives,
+                "comparison": comparison,
+                "note": (
+                    "Same input, three objective weight profiles. Facts only — "
+                    "no mode is declared the winner."
+                ),
+            }
+
+        # 3. Standard, Bundling, or Infeasible Scenarios
         planner = Planner(plan_version="r1")
         plan_result = planner.solve(
             jobs=scenario.jobs,

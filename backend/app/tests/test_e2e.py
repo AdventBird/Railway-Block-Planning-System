@@ -547,12 +547,30 @@ class TestCrossMidnightIntervals:
 class TestScenariosEndToEnd:
     def test_scenario_catalogue_and_runs(self, client):
         catalogue = client.get("/api/scenarios").json()["payload"]["scenarios"]
-        assert len(catalogue) == 4
+        assert len(catalogue) == 5
         run = client.post("/api/scenarios/run", json={"scenario_id": "normal"}).json()
         assert run["status"] == "READY"
         assert run["payload"]["status"] in ("OPTIMAL", "FEASIBLE")
         assert run["payload"]["scenario_id"] == "normal"
         assert run["payload"]["result"]["assignments"]
+
+    def test_mode_tradeoff_scenario_diverges_by_weights(self, client):
+        """Feature 18 — identical input, three weight profiles, measurable difference."""
+        run = client.post("/api/scenarios/run", json={"scenario_id": "mode_tradeoff"}).json()
+        assert run["status"] == "READY"
+        payload = run["payload"]
+        assert set(payload["alternatives"]) == {
+            "SAFETY_FIRST",
+            "BALANCED",
+            "PUNCTUALITY_FIRST",
+        }
+        comparison = payload["comparison"]
+        # PUNCTUALITY_FIRST pays heavily for the affected freight path and
+        # therefore defers the routine job — a measurable, weight-driven change.
+        assert comparison["SAFETY_FIRST"]["scheduled"] == 2
+        assert comparison["BALANCED"]["scheduled"] == 2
+        assert comparison["PUNCTUALITY_FIRST"]["scheduled"] == 1
+        assert comparison["PUNCTUALITY_FIRST"]["deferred"] == 1
 
     def test_evaluation_compares_modes_on_identical_inputs(self, client):
         res = client.post(

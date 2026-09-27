@@ -68,6 +68,46 @@ class Planner:
         self.optimizer = optimizer or CpSatOptimizer(objective_builder=self.objective_builder)
         self.plan_version = plan_version
 
+    # ------------------------------------------------------------------
+    # Job context enrichment — the API/UI renders tier, title, department
+    # and corridor straight from the planner result (backend-authoritative
+    # Tier 0-4, never a numeric score).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _job_context(
+        job: Optional[Union[MaintenanceJob, Dict[str, Any]]],
+        window_id: str = "",
+        window_corridor: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        if job is None:
+            return {}
+        context: Dict[str, Any] = {}
+        title = PriorityEngine._extract_field(job, "title", default=None)
+        if title:
+            context["title"] = str(title)
+        department = FairnessEngine.extract_department(job)
+        if department:
+            context["department"] = str(department)
+        context["tier"] = int(PriorityEngine.assign_tier(job))
+        context["tierReason"] = PriorityEngine.tier_summary(job)
+        if window_id and window_corridor and window_corridor.get(window_id):
+            context["corridorId"] = window_corridor[window_id]
+        else:
+            corridor = PriorityEngine._extract_field(
+                job, "corridor_id", "corridorId", default=None
+            )
+            if corridor:
+                context["corridorId"] = str(corridor)
+        minutes = PriorityEngine._extract_field(
+            job, "duration_minutes", "minutes", default=None
+        )
+        if minutes is not None:
+            try:
+                context["minutes"] = int(minutes)
+            except (TypeError, ValueError):
+                pass
+        return context
+
     def solve(
         self,
         jobs: Sequence[Union[MaintenanceJob, Dict[str, Any]]],
@@ -92,6 +132,12 @@ class Planner:
         job_map = {
             str(PriorityEngine._extract_field(j, "id", "job_id", "jobId", default="")): j
             for j in ranked_jobs
+        }
+        window_corridor = {
+            str(w.get("id") or w.get("windowId") or ""): str(
+                w.get("corridorId") or w.get("corridor_id") or ""
+            )
+            for w in windows
         }
 
         # 2. Fairness & Anti-Starvation Backlog Summary
@@ -154,6 +200,13 @@ class Planner:
                 entry["reason"] = entry.get("reason") or diag.explanation
                 deferred_entries.append(entry)
 
+            for entry in deferred_entries:
+                entry.update(
+                    self._job_context(
+                        job_map.get(str(entry.get("jobId") or "")), "", window_corridor
+                    )
+                )
+
             return PlannerResult(
                 status="INFEASIBLE",
                 plan_version=self.plan_version,
@@ -204,11 +257,29 @@ class Planner:
                     "blocking_constraints": diag.blocking_constraints,
                 })
 
-        # 5. Calculate Metrics
+        # 5. Backend-authored context on every row (Tier 0-4, title,
+        #    department, corridor, duration) so the UI never has to guess.
+        assignments_enriched: List[Dict[str, Any]] = []
+        for assignment in solution.assigned_jobs:
+            enriched = dict(assignment)
+            enriched.update(
+                self._job_context(
+                    job_map.get(str(assignment.get("jobId") or "")),
+                    str(assignment.get("windowId") or ""),
+                    window_corridor,
+                )
+            )
+            assignments_enriched.append(enriched)
+        for entry in deferred_entries:
+            entry.update(
+                self._job_context(job_map.get(str(entry.get("jobId") or "")), "", window_corridor)
+            )
+
+        # 6. Calculate Metrics
         metrics = self.generate_metrics(
             jobs=ranked_jobs,
             windows=windows,
-            assignments=solution.assigned_jobs,
+            assignments=assignments_enriched,
             deferred=deferred_entries,
             train_movements=train_movements,
         )
@@ -216,7 +287,7 @@ class Planner:
         return PlannerResult(
             status=solution.status,
             plan_version=self.plan_version,
-            assignments=solution.assigned_jobs,
+            assignments=assignments_enriched,
             deferred_jobs=deferred_entries,
             metrics=metrics,
         )

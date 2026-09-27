@@ -74,6 +74,44 @@ def planner_run(request: Request, body: PlannerRunRequest | None = None) -> ApiE
     return _envelope(status, result)
 
 
+@router.post("/planner/alternatives", response_model=ApiEnvelope)
+def planner_alternatives(request: Request) -> ApiEnvelope:
+    """Feature 18 — the SAME canonical world solved under all three objective
+    profiles (SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST). Factual results
+    only; the UI must not declare a winner."""
+    from backend.app.services.ingestion import IngestionService
+    from backend.app.services.objective import OptimizationMode
+    from backend.app.services.optimizer import CpSatOptimizer
+    from backend.app.services.bridge import CanonicalBridge
+    from backend.app.services.planning import compat_groups_for_optimizer
+    from backend.app.services.replanning import ReplanningEngine
+
+    try:
+        world = IngestionService().ingest()
+        bridge = CanonicalBridge(
+            world.jobs, world.blocks, world.trains, world.resources, world.sections
+        )
+        alternatives = ReplanningEngine.generate_alternatives(
+            jobs=bridge.optimizer_jobs(),
+            windows=bridge.optimizer_windows(),
+            compat_groups=compat_groups_for_optimizer(bridge),
+            train_movements=bridge.optimizer_trains(),
+        )
+    except Exception as exc:  # never leak a traceback to the demo UI
+        return _error("ALTERNATIVES_FAILED", f"Alternatives failed: {exc}")
+    comparison = {
+        mode.value if hasattr(mode, "value") else str(mode): {
+            "status": res.get("status"),
+            "scheduled": res.get("metrics", {}).get("scheduled"),
+            "deferred": res.get("metrics", {}).get("deferred"),
+            "utilization": res.get("metrics", {}).get("utilization"),
+            "train_impact_count": len(res.get("train_impacts", []) or []),
+        }
+        for mode, res in alternatives.items()
+    }
+    return _envelope("READY", {"alternatives": alternatives, "comparison": comparison})
+
+
 class ReplanRequest(BaseModel):
     """Request for POST /api/replan."""
 
@@ -86,8 +124,17 @@ class ReplanRequest(BaseModel):
 @router.post("/replan", response_model=ApiEnvelope)
 def replan_endpoint(request: Request, body: ReplanRequest) -> ApiEnvelope:
     """Event-driven replanning: current plan + event -> CP-SAT -> new plan."""
+    from backend.app.services.replanning import EventType
+
     if not body.event.get("type"):
         return _error("EVENT_TYPE_REQUIRED", "event.type is required (e.g. SPECIAL_TRAIN).")
+    raw_type = str(body.event.get("type") or "").strip().upper()
+    if raw_type not in EventType.__members__:
+        # An unknown trigger must NOT burn a plan version in the audit trail.
+        return _error(
+            "UNKNOWN_EVENT_TYPE",
+            f"Unknown event type '{raw_type}'. Valid types: {', '.join(EventType.__members__)}.",
+        )
     current_plan = body.current_plan
     if current_plan is None:
         # fall back to the most recent stored plan
@@ -142,12 +189,19 @@ class EvaluateRequest(BaseModel):
 @router.post("/evaluate", response_model=ApiEnvelope)
 def evaluate(request: Request, body: EvaluateRequest) -> ApiEnvelope:
     """Baseline comparison — identical inputs, factual metrics, no winner."""
-    from backend.app.services.evaluation import EvaluationEngine
+    from backend.app.services.evaluation import EvaluationEngine, EvaluationMode
 
+    unknown = [m for m in body.modes if str(m).upper() not in EvaluationMode.__members__]
+    if unknown:
+        return _error(
+            "UNKNOWN_MODE",
+            f"Unknown evaluation mode(s): {', '.join(unknown)}. "
+            f"Valid modes: {', '.join(EvaluationMode.__members__)}.",
+        )
     try:
         result = EvaluationEngine.evaluate(
             scenario_id=body.scenario_id,
-            modes=body.modes,
+            modes=[str(m).upper() for m in body.modes],
         )
     except ValueError as exc:
         return _error("UNKNOWN_SCENARIO", str(exc))

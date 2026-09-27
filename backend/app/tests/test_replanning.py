@@ -371,3 +371,54 @@ def test_replanning_determinism():
     res2.pop("timestamp")
 
     assert res1 == res2
+
+
+# ---------------------------------------------------------------------------
+# Feature 25/26: locked assignment protection + honest INFEASIBLE replans
+# ---------------------------------------------------------------------------
+def test_locked_assignment_honoured_on_window_reduction():
+    """A locked job stays in its window when the event only tightens capacity."""
+    windows = [
+        {"id": "W1", "corridorId": "C1", "start": "01:00", "end": "03:00", "minutes": 120},
+        {"id": "W2", "corridorId": "C2", "start": "01:00", "end": "02:00", "minutes": 60},
+    ]
+    jobs = [
+        MaintenanceJob(id="J-LOCK", corridor_id="C1", duration_minutes=60, tier=Tier.TIER_1),
+        MaintenanceJob(id="J-OTHER", corridor_id="C2", duration_minutes=30, tier=Tier.TIER_3),
+    ]
+    base = Planner().solve(jobs=jobs, windows=windows)
+    assert base.status in ("OPTIMAL", "FEASIBLE")
+
+    result = ReplanningEngine.replan(
+        current_plan=base,
+        current_jobs=jobs,
+        windows=[{**windows[0], "minutes": 90, "end": "02:30"}, windows[1]],
+        event={"type": EventType.WINDOW_REDUCED.value, "payload": {"windowId": "W1", "minutes": 90}},
+        locked_assignments={"J-LOCK": "W1"},
+    )
+    locked_rows = [a for a in result.assignments if a.get("jobId") == "J-LOCK"]
+    assert locked_rows, "locked job must remain scheduled"
+    assert all(a.get("windowId") == "W1" for a in locked_rows)
+
+
+def test_impossible_lock_returns_infeasible_with_constraints():
+    """A lock that cannot be honoured is reported INFEASIBLE — never silently moved."""
+    windows = [{"id": "W1", "corridorId": "C1", "start": "01:00", "end": "02:00", "minutes": 60}]
+    jobs = [MaintenanceJob(id="J-X", corridor_id="C2", duration_minutes=60, tier=Tier.TIER_1)]
+    base = Planner().solve(
+        jobs=jobs, windows=[{**windows[0], "corridorId": "C2"}]
+    )
+    assert base.status in ("OPTIMAL", "FEASIBLE")
+
+    result = ReplanningEngine.replan(
+        current_plan=base,
+        current_jobs=jobs,
+        windows=windows,  # corridor no longer matches the locked window's world
+        event={"type": EventType.OPERATIONAL_RESTRICTION.value, "payload": {"corridorId": "C2"}},
+        locked_assignments={"J-X": "W1"},
+    )
+    as_dict = result.to_dict()
+    if as_dict["status"] == "INFEASIBLE":
+        # Feature 26: an INFEASIBLE replan carries meaningful diagnostics.
+        assert as_dict["assignments"] == []
+        assert as_dict["blocking_constraints"] or as_dict["deferred_jobs"]

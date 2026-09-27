@@ -11,7 +11,8 @@ dist-ssr/
 build/
 *.tsbuildinfo
 
-# Python artifacts
+# Python artifacts (anchored to the repo root — `lib/` must not swallow
+# frontend/src/lib/, which holds the frontend's shared planning arithmetic)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -27,7 +28,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/

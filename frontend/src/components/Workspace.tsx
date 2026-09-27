@@ -20,16 +20,19 @@ import {
   affectedTrainsOf,
   attemptedWindowOf,
   getDeferredJobs,
+  getPlannerAlternatives,
   getPlannerApiStatus,
   getPlannerResult,
   getWindowDetails,
+  OBJECTIVE_MODES,
   type AffectedTrain,
   type DeferredJob,
+  type PlannerAlternatives,
   type PlannerAssignment,
   type WindowDetails,
 } from "../api/planner";
 import { apiBaseUrl } from "../api/client";
-import type { PlannerResult } from "../api/types";
+import type { PlannerObjectiveMode, PlannerResult } from "../api/types";
 import {
   PlanningQualityDashboard,
   buildQualityMetricsFromPlan,
@@ -285,6 +288,11 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
   const [planning, setPlanning] = useState<boolean>(false);
   const [planningError, setPlanningError] = useState<string | null>(null);
+  // Feature 18 — objective profile of the plan + factual mode comparison.
+  const [objectiveMode, setObjectiveMode] = useState<PlannerObjectiveMode>("BALANCED");
+  const [alternatives, setAlternatives] = useState<PlannerAlternatives | null>(null);
+  const [altsLoading, setAltsLoading] = useState<boolean>(false);
+  const [alternativesError, setAlternativesError] = useState<string | null>(null);
 
   /** API assignments (display-normalized) when a backend answered, else seed. */
   const effectiveAssignments: PlannerAssignment[] = useMemo(
@@ -338,12 +346,13 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
     };
   }, []);
 
-  /** "Generate Plan" — re-run the real planner (§29, honest status banner). */
-  const regenerate = async () => {
+  /** "Generate Plan" — re-run the real planner (§29, honest status banner).
+   *  The objective profile (Feature 18) is passed through to the backend. */
+  const regenerate = async (mode: PlannerObjectiveMode = objectiveMode) => {
     setPlanning(true);
     setPlanningError(null);
     try {
-      const result = await getPlannerResult();
+      const result = await getPlannerResult(mode);
       setPlannerResult(result);
       const normalized = normalizeAssignmentsWithSeed(result.assignments);
       setApiAssignments(normalized);
@@ -363,6 +372,23 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
       );
     } finally {
       setPlanning(false);
+    }
+  };
+
+  /** Feature 18 — same input solved under all three objective profiles. */
+  const loadAlternatives = async () => {
+    setAltsLoading(true);
+    setAlternativesError(null);
+    try {
+      const res = await getPlannerAlternatives();
+      if (res.source.status === "live" && Object.keys(res.comparison).length > 0) {
+        setAlternatives(res);
+      } else {
+        setAlternatives(null);
+        setAlternativesError(res.source.message ?? "Objective-mode comparison unavailable.");
+      }
+    } finally {
+      setAltsLoading(false);
     }
   };
 
@@ -557,7 +583,31 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                 <span>·</span>
                 <span>{stats.utilization}% utilized</span>
               </div>
-              <Button onClick={regenerate} disabled={planning}>
+              <div className="flex overflow-hidden rounded-lg border border-[#e3e6f0] bg-white" role="group" aria-label="Objective mode">
+                {OBJECTIVE_MODES.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      setObjectiveMode(m);
+                      void regenerate(m);
+                    }}
+                    disabled={planning}
+                    title={
+                      m === "SAFETY_FIRST"
+                        ? "Maximize safety-critical completion"
+                        : m === "BALANCED"
+                          ? "Balance maintenance vs train impact"
+                          : "Minimize operational disruption"
+                    }
+                    className={`focus-primary px-2.5 py-1 text-[10px] font-bold transition-colors duration-200 disabled:opacity-50 ${
+                      objectiveMode === m ? "bg-[#2e3092] text-white" : "text-[#4d5468] hover:bg-[#f5f6fc]"
+                    }`}
+                  >
+                    {m === "SAFETY_FIRST" ? "Safety" : m === "BALANCED" ? "Balanced" : "Punctuality"}
+                  </button>
+                ))}
+              </div>
+              <Button onClick={() => void regenerate()} disabled={planning}>
                 {planning ? "Planning…" : "Generate Plan"}
               </Button>
             </div>
@@ -575,6 +625,74 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
               </span>
             ))}
           </div>
+        </Card>
+        {/* Feature 18 — factual objective-mode comparison (same input, three
+            weight profiles). Facts only: no mode is declared the winner. */}
+        <Card className="p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">
+                Objective mode comparison
+              </div>
+              <div className="text-[10px] text-[#878da1]">
+                Same input · three weight profiles · facts only, no winner declared
+              </div>
+            </div>
+            <Button variant="secondary" onClick={() => void loadAlternatives()} disabled={altsLoading}>
+              {altsLoading ? "Solving…" : alternatives ? "Refresh comparison" : "Compare objective modes"}
+            </Button>
+          </div>
+          {alternativesError && (
+            <div className="rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2 text-[11px] text-[#991b1b]">
+              {alternativesError}
+            </div>
+          )}
+          {alternatives && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[11px]">
+                <thead>
+                  <tr className="border-b border-[#eef0f6] text-[9px] uppercase tracking-wider text-[#878da1]">
+                    <th className="py-1.5 pr-3 font-bold">Objective</th>
+                    <th className="py-1.5 pr-3 font-bold">Scheduled</th>
+                    <th className="py-1.5 pr-3 font-bold">Deferred</th>
+                    <th className="py-1.5 pr-3 font-bold">Utilization</th>
+                    <th className="py-1.5 pr-3 font-bold">Train impact</th>
+                    <th className="py-1.5 font-bold">Solver</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {OBJECTIVE_MODES.map((m) => {
+                    const row = alternatives.comparison[m];
+                    if (!row) return null;
+                    const active = objectiveMode === m;
+                    return (
+                      <tr key={m} className={`border-b border-[#eef0f6] last:border-0 ${active ? "bg-[#eef0fa]" : ""}`}>
+                        <td className="py-1.5 pr-3 font-bold text-[#171a30]">
+                          {m === "SAFETY_FIRST" ? "Safety-first" : m === "BALANCED" ? "Balanced" : "Punctuality-first"}
+                          {active && (
+                            <span className="ml-1.5 rounded bg-[#2e3092] px-1 py-0.5 text-[8px] font-extrabold uppercase tracking-wider text-white">
+                              active
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-1.5 pr-3 font-mono text-[#171a30]">{row.scheduled ?? "—"}</td>
+                        <td className="py-1.5 pr-3 font-mono text-[#171a30]">{row.deferred ?? "—"}</td>
+                        <td className="py-1.5 pr-3 font-mono text-[#171a30]">
+                          {typeof row.utilization === "number" ? `${row.utilization}%` : "—"}
+                        </td>
+                        <td className="py-1.5 pr-3 font-mono text-[#171a30]">{row.trainImpactCount ?? 0}</td>
+                        <td className="py-1.5 font-mono text-[10px] text-[#4d5468]">{row.status ?? "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="mt-2 text-[10px] leading-relaxed text-[#878da1]">
+                Under weight-sensitive pressure (see Simulation → Objective Trade-off) the profiles diverge measurably;
+                on tonight's already-constrained world the feasible optimum can coincide across profiles.
+              </p>
+            </div>
+          )}
         </Card>
         {/* ------------------------------ RIGHT ----------------------------- */}
         <div className="space-y-3">

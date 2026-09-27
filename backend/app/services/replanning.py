@@ -64,6 +64,10 @@ class ReplanningResult:
     assignments: List[Dict[str, Any]] = field(default_factory=list)
     deferred_jobs: List[Dict[str, Any]] = field(default_factory=list)
     timestamp: str = ""
+    # Feature 26 — INFEASIBLE replans must surface the solver's binding
+    # constraints and affected jobs (never a bare status).
+    blocking_constraints: List[str] = field(default_factory=list)
+    affected_jobs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary matching the required API contract."""
@@ -81,6 +85,8 @@ class ReplanningResult:
             "assignments": list(self.assignments),
             "deferred_jobs": list(self.deferred_jobs),
             "timestamp": self.timestamp,
+            "blocking_constraints": list(self.blocking_constraints),
+            "affected_jobs": list(self.affected_jobs),
         }
 
 
@@ -326,6 +332,8 @@ class ReplanningEngine:
             assignments=new_dict.get("assignments", []),
             deferred_jobs=new_dict.get("deferred_jobs", []),
             timestamp=datetime.now(timezone.utc).isoformat(),
+            blocking_constraints=list(new_dict.get("blocking_constraints", []) or []),
+            affected_jobs=list(new_dict.get("affected_jobs", []) or []),
         )
 
     @classmethod

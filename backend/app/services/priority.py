@@ -529,6 +529,36 @@ class PriorityEngine:
         return [(entry[4], entry[0], entry[5]) for entry in scored_entries]
 
     @classmethod
+    def tier_summary(cls, job: Union["MaintenanceJobProjection", Dict[str, Any]]) -> str:
+        """One-line, score-free tier summary for API payloads (no numbers)."""
+        tier = cls.assign_tier(job)
+        tier_name = TIER_NAMES.get(tier, "Normal")
+        drivers: List[str] = []
+        safety = cls._extract_field(job, "safety_consequence", "safetyConsequence")
+        severity = cls._extract_field(job, "severity")
+        criticality = cls._extract_field(job, "asset_criticality", "assetCriticality")
+        overdue = cls._extract_field(job, "overdue")
+        overdue_days = cls._extract_field(job, "overdue_days", "overdue_age")
+        try:
+            overdue_positive = bool(overdue) or float(overdue_days or 0) > 0
+        except (TypeError, ValueError):
+            overdue_positive = bool(overdue)
+        if safety:
+            drivers.append(f"safety consequence {str(safety).lower().replace('_', ' ')}")
+        if severity:
+            drivers.append(f"severity {str(severity).lower()}")
+        if criticality:
+            drivers.append(f"asset criticality {str(criticality).lower().replace('_', ' ')}")
+        if overdue_positive:
+            drivers.append("overdue")
+        if not drivers:
+            deadline = cls._extract_field(job, "deadline", default="")
+            if deadline:
+                drivers.append(f"due {deadline}")
+        body = "; ".join(drivers) if drivers else "routine maintenance item"
+        return f"Tier {tier} ({tier_name}) — {body}"
+
+    @classmethod
     def explanation(cls, job: Union["MaintenanceJobProjection", Dict[str, Any]]) -> str:
         """Generate a backend explanation for a job's tier without exposing numerical scoring.
 

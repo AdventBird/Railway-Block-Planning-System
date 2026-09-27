@@ -40,7 +40,7 @@ Railway-Block-Planning-System/
 │   │   ├── rules/                # Compatibility, possession, related-work, reason codes
 │   │   ├── services/             # Ingestion → bridge → priority/optimizer → planner →
 │   │   │                         #   replanning, scenarios, evaluation, governance
-│   │   ├── tests/                # 258 tests (unit + end-to-end API flow)
+│   │   ├── tests/                # 261 tests (unit + end-to-end API flow)
 │   │   ├── config.py             # Environment-driven settings
 │   │   ├── main.py               # uvicorn entrypoint (python -m backend.app.main)
 │   │   └── schemas.py            # Canonical Pydantic models & response envelope
@@ -106,8 +106,9 @@ npm run dev
 | GET | `/api/jobs/{id}/block-compatibility` · `/related` · `/possession` | Rule-engine queries |
 | GET | `/api/coordination` · `/api/reason-codes` | Compatibility verdicts & reason-code catalogue |
 | **POST** | **`/api/planner/run`** | **Real CP-SAT plan** (`mode`: SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST); stores `PLAN-r1` |
+| **POST** | **`/api/planner/alternatives`** | **Feature 18** — the same world solved under all three weight profiles (factual comparison, no winner declared) |
 | **POST** | **`/api/replan`** | **Event-driven replan** (SPECIAL_TRAIN, TRAIN_CANCELLED, RESOURCE_FAILURE, EMERGENCY_JOB, WINDOW_REDUCED, WINDOW_WITHDRAWN, PRIORITY_CHANGE, OPERATIONAL_RESTRICTION) → r2, r3, … with before/after diffs |
-| GET/POST | `/api/scenarios` · `/api/scenarios/run` | Seeded scenario world + runs |
+| GET/POST | `/api/scenarios` · `/api/scenarios/run` | Seeded scenario worlds + runs: `normal`, `bundling`, `live_event`, `infeasible`, `mode_tradeoff` |
 | POST | `/api/evaluate` | Baseline comparison: EARLIEST_AVAILABLE vs GREEDY_PRIORITY vs CP_SAT on identical inputs |
 | POST | `/api/plans/{id}/approve` · `/modify` · `/reject` · `/lock` | Officer-gated governance lifecycle |
 | GET | `/api/plans/{id}` · `/api/plans/{id}/audit` · `/api/audit` | Governed plan + immutable audit trail |
@@ -127,16 +128,29 @@ npm run preview
 ## 🧪 Testing
 
 ```bash
-# Backend: 258 tests — unit coverage (adapters, canonical models, data quality,
+# Backend: 261 tests — unit coverage (adapters, canonical models, data quality,
 # rules, priority, optimizer, planner, replanning, scenarios, evaluation,
 # fairness, buffer, resources) + end-to-end API flow tests (test_e2e.py) that
 # pin the §46 invariants and the CP-SAT scheduling guarantees (genuine
 # parallelism for compatible jobs, conditional ordering, interval-exact
-# resource conflicts, locked assignments, cross-midnight intervals) through
-# the same endpoints the frontend calls.
+# resource conflicts, locked assignments, cross-midnight intervals, weight-
+# sensitive objective modes) through the same endpoints the frontend calls.
 npm run test:backend
 # or
 python -m pytest backend/app/tests -q
+
+# Frontend: 24 Vitest unit tests (circular-clock time arithmetic, planner
+# payload normalisation, canonical↔seed id bridge) + typecheck + production build
+npm run test:frontend
+# or
+npm run test --prefix frontend
+
+# Full-browser E2E smoke (system Chromium; production build + live backend):
+#   1. start the backend, then `npm run preview --prefix frontend -- --port 4173`
+#   2. npm run e2e --prefix frontend
+# Drives landing → sign-in → command center → network → live CP-SAT plan →
+# objective modes → assistant boundary refusals → simulation → approval →
+# lock → audit → hash navigation → refresh → sign-out (exit code 0 required).
 
 # Typecheck + production build of the frontend
 npm run typecheck

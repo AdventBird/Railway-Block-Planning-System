@@ -24,10 +24,11 @@ def create_app() -> FastAPI:
         ),
     )
 
-    # The dev frontend runs on Vite (5173); allow the local origins.
+    # The demo frontend runs from any local origin: vite dev (5173), vite
+    # preview (4173) and serve.mjs (5252) — a configurable localhost regex.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origin_regex=config.CORS_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
     )

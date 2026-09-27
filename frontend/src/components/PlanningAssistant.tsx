@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Info } from "lucide-react";
 import { Button, Card, Collapse, PRIMARY } from "./ui";
 
-export type AssistantScenario = "find" | "reserve" | null;
+export type AssistantScenario = "find" | "reserve" | "why" | "refusal" | null;
 
 interface AssistantProps {
   open: boolean;
@@ -63,6 +63,27 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
   if (!open) return null;
 
   const prepare = (text: string) => {
+    const t = text.toLowerCase();
+    // Governance boundary — the assistant must refuse authority-grabbing or
+    // constraint-bypassing requests outright (the LLM is an interface layer,
+    // never a privileged planning engine).
+    if (
+      /(approv|authori[sz]e|sanction|lock|unlock|override|bypass|ignore|force|cancel (all|the)|without constraint|skip)/.test(
+        t
+      )
+    ) {
+      setActive("refusal");
+      setAsked(text);
+      setStep(0);
+      return;
+    }
+    // Explanation requests route to the backend's own reason codes.
+    if (/why (wasn'?t|is|did)|not scheduled|deferred|left out/.test(t)) {
+      setActive("why");
+      setAsked(text);
+      setStep(0);
+      return;
+    }
     const isReserve = /reserv|relief|special train|protect/i.test(text);
     setActive(isReserve ? "reserve" : "find");
     setAsked(text);
@@ -121,8 +142,54 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
             </div>
           </div>
 
-          {/* Prepared scenario */}
-          {active && asked && (
+          {/* Prepared scenario — refusals first (adversarial prompts) */}
+          {active === "refusal" && asked && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[#171a30]">“{asked}”</p>
+              </div>
+              <div className="rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2.5">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[#dc2626]">Cannot help with that</div>
+                <p className="mt-1 leading-relaxed text-[#171a30]">
+                  This assistant is an interface only. It cannot approve, authorize, lock or bypass planning
+                  constraints, and it cannot cancel safety restrictions. Every schedule decision comes from the
+                  deterministic CP-SAT planner; only the officer authorizes in Human Approval.
+                </p>
+              </div>
+            </div>
+          )}
+          {active === "why" && asked && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[#171a30]">“{asked}”</p>
+              </div>
+              <Card className="p-3">
+                <div className="mb-2">
+                  <span className="rounded bg-[#2e3092] px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-white">
+                    Routed to the planner's own explanations
+                  </span>
+                </div>
+                <div className="space-y-0.5">
+                  <div className="flex items-baseline justify-between gap-3 border-b border-[#eef0f6] py-1">
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Source</span>
+                    <span className="text-right text-[11px] font-semibold text-[#171a30]">
+                      Backend reason codes (INSUFFICIENT_WINDOW, TRAIN_CONFLICT, …)
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-3 border-b border-[#eef0f6] py-1 last:border-0">
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Where</span>
+                    <span className="text-right text-[11px] font-semibold text-[#171a30]">
+                      Planning Workspace → Deferred list → “Why not scheduled?”
+                    </span>
+                  </div>
+                </div>
+              </Card>
+              <Button onClick={onRunPlan}>Open deferred list →</Button>
+            </div>
+          )}
+          {active && asked && active !== "refusal" && active !== "why" && (
             <div className="space-y-3">
               <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>

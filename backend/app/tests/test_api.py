@@ -23,7 +23,16 @@ def test_api_get_scenarios(client):
     assert res.status_code == 200
     body = res.json()
     assert "scenarios" in body["payload"]
-    assert len(body["payload"]["scenarios"]) == 4
+    assert len(body["payload"]["scenarios"]) == 5
+
+
+def test_api_replan_rejects_unknown_event_type(client):
+    """An unknown trigger must be an error — never silently burn a plan version."""
+    res = client.post("/api/replan", json={"event": {"type": "BOGUS"}})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "ERROR"
+    assert body["errors"][0]["code"] == "UNKNOWN_EVENT_TYPE"
 
 
 def test_api_post_evaluate(client):

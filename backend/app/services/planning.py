@@ -126,6 +126,9 @@ def run_plan(
 
     if store:
         store_handle = get_plan_store()
+        # Snapshot the FULL canonical job universe, not just the planner-
+        # eligible projection: staleness must detect genuine world drift,
+        # while data-quality-excluded records stay visible with their fields.
         snapshot = {
             "jobs": [
                 {
@@ -137,7 +140,7 @@ def run_plan(
                     "required_resources": list(j.required_resources),
                     "power_isolation_required": j.power_isolation_required,
                 }
-                for j in bridge.jobs
+                for j in world.jobs
             ]
         }
         plan_id = f"PLAN-{plan_version}"
@@ -196,6 +199,8 @@ def replan(
     if not world_was_provided and store:
         from backend.app.services.governance import get_plan_store
 
+        # Same rule as run_plan: snapshot the full canonical job universe so
+        # staleness detects genuine drift (never data-quality exclusions).
         snapshot = {
             "jobs": [
                 {
@@ -207,7 +212,7 @@ def replan(
                     "required_resources": list(j.required_resources),
                     "power_isolation_required": j.power_isolation_required,
                 }
-                for j in bridge.jobs
+                for j in world.jobs
             ]
         }
         store_handle = get_plan_store()

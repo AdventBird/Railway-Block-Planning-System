@@ -26,6 +26,7 @@ export const ENDPOINTS = {
   blocks: "/api/blocks",
   network: "/api/network",
   plannerRun: "/api/planner/run",
+  plannerAlternatives: "/api/planner/alternatives",
   replan: "/api/replan",
   scenarios: "/api/scenarios",
   scenariosRun: "/api/scenarios/run",
