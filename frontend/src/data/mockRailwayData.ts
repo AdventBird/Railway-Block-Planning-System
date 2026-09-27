@@ -4,23 +4,26 @@ export const routeTitle = "NDLS – BSB Trunk (NCR Schematic)";
 
 /**
  * 10 real stations along the Delhi – Varanasi trunk plus the Kanpur–Lucknow
- * branch, laid out left-to-right like a control-room line diagram (manual
- * positions, not auto-layout).
+ * branch, laid out as a serpentine control-room line diagram (manual positions,
+ * not auto-layout): row 1 runs left→right to Tundla, drops at Kanpur, row 2
+ * runs right→left to Varanasi, and both branches drop to row 3. This keeps the
+ * graph compact so fitView renders stations at ~1:1 scale (spec: the schematic
+ * must be the dominant object on the page).
  *
- * Station nodes render at 160 x 64 px, so keep >= 260 px horizontal spacing
- * between neighbours on the same row.
+ * Station nodes render at 144 x 64 px — keep >= 190 px horizontal spacing and
+ * >= 230 px vertical spacing between neighbours.
  */
 export const mockStations: Station[] = [
-  { id: "NDLS", name: "New Delhi", code: "NDLS", x: 40, y: 250, junction: true },
-  { id: "GZB", name: "Ghaziabad", code: "GZB", x: 300, y: 180, junction: true },
-  { id: "ALJN", name: "Aligarh", code: "ALJN", x: 560, y: 220 },
-  { id: "TDL", name: "Tundla Junction", code: "TDL", x: 820, y: 180, junction: true },
-  { id: "CNB", name: "Kanpur Central", code: "CNB", x: 1080, y: 250, junction: true },
-  { id: "FTP", name: "Fatehpur", code: "FTP", x: 1340, y: 200 },
-  { id: "PRYJ", name: "Prayagraj Junction", code: "PRYJ", x: 1600, y: 260, junction: true },
-  { id: "DDU", name: "Pt. Deen Dayal Upadhyaya Jn", code: "DDU", x: 1860, y: 200, junction: true },
-  { id: "BSB", name: "Varanasi Junction", code: "BSB", x: 2120, y: 140 },
-  { id: "LKO", name: "Lucknow Charbagh", code: "LKO", x: 1420, y: 40 },
+  { id: "NDLS", name: "New Delhi", code: "NDLS", x: 40, y: 60, junction: true },
+  { id: "GZB", name: "Ghaziabad", code: "GZB", x: 240, y: 60, junction: true },
+  { id: "ALJN", name: "Aligarh", code: "ALJN", x: 440, y: 60 },
+  { id: "TDL", name: "Tundla Junction", code: "TDL", x: 640, y: 60, junction: true },
+  { id: "CNB", name: "Kanpur Central", code: "CNB", x: 640, y: 300, junction: true },
+  { id: "FTP", name: "Fatehpur", code: "FTP", x: 440, y: 300 },
+  { id: "PRYJ", name: "Prayagraj Junction", code: "PRYJ", x: 240, y: 300, junction: true },
+  { id: "DDU", name: "Pt. Deen Dayal Upadhyaya Jn", code: "DDU", x: 40, y: 300, junction: true },
+  { id: "BSB", name: "Varanasi Junction", code: "BSB", x: 40, y: 540 },
+  { id: "LKO", name: "Lucknow Charbagh", code: "LKO", x: 640, y: 540 },
 ];
 
 /**

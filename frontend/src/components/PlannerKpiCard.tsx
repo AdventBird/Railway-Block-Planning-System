@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OK, PRIMARY, WARN, CRIT, Tooltip } from "./ui";
 import { jobs } from "../data/jobsData";
-import { recommendedPlan } from "../data/planData";
+import { recommendedPlan, trainImpactValue } from "../data/planData";
 import type { PlannerMetrics, PlannerResult } from "../api/types";
 
 export interface PlannerQualityMetrics {
@@ -149,18 +149,11 @@ export function PlannerKpiCard({
     >
       <div className="flex items-center justify-between gap-1.5">
         <span
-          className="truncate text-[10px] font-bold uppercase tracking-[0.12em] text-[#878da1] transition-colors group-hover:text-[#4d5468]"
+          className="min-w-0 truncate text-[10px] font-bold uppercase tracking-[0.12em] text-[#878da1] transition-colors group-hover:text-[#4d5468]"
           title={typeof title === "string" ? title : undefined}
         >
           {title}
         </span>
-        {badge && (
-          <span
-            className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider border transition-transform duration-150 group-hover:scale-105 ${badgeStyles[badgeTone]}`}
-          >
-            {badge}
-          </span>
-        )}
       </div>
 
       <div className="mt-1 flex items-baseline justify-between gap-2">
@@ -193,12 +186,21 @@ export function PlannerKpiCard({
         </div>
       )}
 
-      {subtitle && (
-        <div
-          className="mt-1 truncate text-[11px] text-[#4d5468]"
-          title={typeof subtitle === "string" ? subtitle : undefined}
-        >
-          {subtitle}
+      {(subtitle || badge) && (
+        <div className="mt-1 flex items-center justify-between gap-1.5">
+          <div
+            className="min-w-0 truncate text-[11px] text-[#4d5468]"
+            title={typeof subtitle === "string" ? subtitle : undefined}
+          >
+            {subtitle}
+          </div>
+          {badge && (
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider border transition-transform duration-150 group-hover:scale-105 ${badgeStyles[badgeTone]}`}
+            >
+              {badge}
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -220,9 +222,10 @@ export interface PlanningQualityDashboardProps {
 }
 
 const STATUS_BADGE_STYLE: Record<string, { tone: "ok" | "primary" | "crit" | "warn"; label: string }> = {
-  Optimal: { tone: "ok", label: "Optimal plan" },
-  Feasible: { tone: "primary", label: "Feasible plan" },
-  Infeasible: { tone: "crit", label: "Infeasible constraint" },
+  // Solver status is a mathematical result — the officer's approval is separate.
+  Optimal: { tone: "ok", label: "Solver: optimal" },
+  Feasible: { tone: "primary", label: "Solver: feasible" },
+  Infeasible: { tone: "crit", label: "Solver: infeasible" },
 };
 
 /**
@@ -322,9 +325,7 @@ export function PlanningQualityDashboard({
               ? `${metrics.trainImpact} min`
               : metrics.trainImpact
           }
-          subtitle="Freight regulation hold"
-          badge="Paths OK"
-          badgeTone="ok"
+          subtitle="Paths with protected movements"
           tone="#4d5468"
         />
 
@@ -395,8 +396,11 @@ export function buildQualityMetricsFromPlan(
   // Utilization: from metrics or default r3 (91%)
   const utilization = metrics?.utilization ?? 91;
 
-  // Train impact: cumulative freight regulation (15 min + 10 min = 25 min in synthetic plan)
-  const impactMinutes = "25 min";
+  // Train impact: derived from THIS plan's impact rows (backend rows when live,
+  // seed rows for the synthetic fallback) — minutes when stated, else path count.
+  const impactMinutes = trainImpactValue(
+    result?.trainImpact?.length ? result.trainImpact : recommendedPlan.trainImpact
+  );
 
   // Possessions used: distinct blocks scheduled tonight
   const usedWindows = new Set(assignments.map((a) => a.windowId));

@@ -5,10 +5,11 @@
 // The officer is the only authority — nothing here is automatic.
 // ---------------------------------------------------------------------------
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Card, Chip, Drawer, SectionHeader, Button, CRIT, NEUTRAL, OK, PRIMARY } from "./ui";
+import { Card, Chip, Drawer, PageHeader, Button, CRIT, NEUTRAL, OK, PRIMARY } from "./ui";
 import { blockWindows, PLAN_DATE, PLAN_VERSION, PLAN_VERSION_NEXT } from "../data/opsData";
 import { decisionAudit, recommendedPlan, type DecisionEntry } from "../data/planData";
 import { jobById } from "../data/jobsData";
+import { seedWindowOfBackendId, seedJobOfBackendId } from "../data/idMap";
 import { planStats } from "../lib/plan";
 import { UtilBar } from "./TimelineUtil";
 import { getPlannerResult } from "../api/planner";
@@ -258,20 +259,63 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
     [refreshGovernance]
   );
 
-  const stats = useMemo(
-    () => planStats(blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })), recommendedPlan.assignments),
-    []
+  // Summary metrics follow the LIVE plan when the backend has served one —
+  // the officer must approve what the quality dashboard is showing (§6).
+  const summaryAssignments = useMemo(
+    () =>
+      (plannerResult?.assignments ?? recommendedPlan.assignments).map((a) => ({
+        ...a,
+        windowId: seedWindowOfBackendId(a.windowId) ?? a.windowId,
+      })),
+    [plannerResult]
   );
+  // Decision-summary metrics: the BACKEND owns interval/window arithmetic
+  // (PART 6 — no frontend re-computation that can contradict the planner).
+  // planStats only serves as the offline/fallback renderer.
+  const stats = useMemo(() => {
+    const m = plannerResult?.source.status === "live" ? plannerResult.metrics : null;
+    if (m && (m.utilization !== undefined || m.blocks !== undefined)) {
+      return {
+        blocks: m.blocks ?? summaryAssignments.length,
+        jobs: m.scheduled ?? summaryAssignments.length,
+        utilization: m.utilization ?? 0,
+        windowMinutes: m.windowMinutes ?? 0,
+        occupiedMinutes: m.occupiedMinutes ?? 0,
+        unusedMinutes: m.unusedMinutes ?? 0,
+      };
+    }
+    return planStats(blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })), summaryAssignments);
+  }, [plannerResult, summaryAssignments]);
+  const summaryImpacts = plannerResult?.trainImpact?.length ?? recommendedPlan.trainImpact.length;
+  const summaryDeferred = plannerResult?.deferred?.length ?? recommendedPlan.deferred.length;
+
+  /** Issues to review — derived from the actual plan, never hard-coded. */
+  const issues = useMemo(() => {
+    const rows = plannerResult?.deferred ?? [];
+    const safety = rows.filter(
+      (d) => (jobById(seedJobOfBackendId(d.jobId) ?? d.jobId)?.tier ?? 9) <= 1
+    ).length;
+    const resource = rows.filter((d) => d.code === "RESOURCE_CONFLICT").length;
+    return [
+      { n: Number(qualityMetrics.criticalBacklog) || 0, label: "critical backlog" },
+      { n: safety, label: "deferred safety jobs" },
+      { n: resource, label: "resource conflicts" },
+    ].filter((i) => i.n > 0);
+  }, [plannerResult, qualityMetrics.criticalBacklog]);
+
   const version = status === "Modified" || revisedNote ? PLAN_VERSION_NEXT : PLAN_VERSION;
   const needsReason = rejecting && reason.trim().length < 8;
   const audit = auditId ? decisions.find((d) => d.id === auditId) ?? null : null;
 
   return (
-    <div>
-      <SectionHeader
-        title="Approval & History"
-        subtitle="The officer is the only step that authorizes a block"
-        right={
+    <div className="flex flex-col gap-3">
+      {/* Page header — decision context + lock control */}
+      <div className="order-1">
+        <PageHeader
+          title="Approval & History"
+          subtitle="The officer is the only step that authorizes a block"
+          meta="Approve · Modify · Reject — every decision is versioned and auditable"
+          right={
           <button
             onClick={() => {
               if (!locked) {
@@ -289,19 +333,20 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
           >
             {locked ? "Unlock decision" : "Lock decision"}
           </button>
-        }
-      />
+          }
+        />
+      </div>
 
       {/* Status banner */}
-      <div className={`mb-3 rounded-xl border px-4 py-2.5 text-xs font-semibold ${BANNER[status].cls}`}>
+      <div className={`order-2 rounded-xl border px-4 py-2.5 text-xs font-semibold ${BANNER[status].cls}`}>
         {BANNER[status].text}
         {revisedNote && status === "Pending approval" && (
           <span className="mt-1 block text-[11px] font-medium text-[#b45309]">Revised plan: {revisedNote}</span>
         )}
       </div>
 
-      {/* Backend governance strip (§36) — the real lifecycle + audit trail */}
-      <Card className="mb-3 px-4 py-3">
+      {/* Backend governance strip (§36) — demoted L3 context, below the decision */}
+      <Card className="order-7 px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">
@@ -344,8 +389,8 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
         )}
       </Card>
 
-      {/* Plan summary strip */}
-      <Card className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3">
+      {/* Decision summary — what is being approved (Level 1) */}
+      <Card className="order-3 flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3.5">
         <span className="text-sm font-extrabold uppercase tracking-wider text-[#171a30]">
           Plan <span className="text-[#2e3092]">{version.split("·")[1]?.trim() ?? "r3"}</span>
         </span>
@@ -361,50 +406,86 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
           <UtilBar pct={stats.utilization} tone={PRIMARY} />
         </span>
         <span>
-          <span className="font-mono text-lg font-extrabold text-[#171a30]">{recommendedPlan.trainImpact.length}</span>{" "}
-          <span className="text-[10px] uppercase tracking-wider text-[#878da1]">impacts</span>
+          <span className="font-mono text-lg font-extrabold text-[#171a30]">{summaryImpacts}</span>{" "}
+          <span className="text-[10px] uppercase tracking-wider text-[#878da1]">train impacts</span>
         </span>
         <span>
-          <span className="font-mono text-lg font-extrabold text-[#171a30]">{recommendedPlan.deferred.length}</span>{" "}
+          <span
+            className="font-mono text-lg font-extrabold"
+            style={{ color: Number(qualityMetrics.criticalBacklog) > 0 ? "#dc2626" : "#16a34a" }}
+          >
+            {qualityMetrics.criticalBacklog}
+          </span>{" "}
+          <span className="text-[10px] uppercase tracking-wider text-[#878da1]">critical backlog</span>
+        </span>
+        <span>
+          <span className="font-mono text-lg font-extrabold text-[#171a30]">{summaryDeferred}</span>{" "}
           <span className="text-[10px] uppercase tracking-wider text-[#878da1]">deferred</span>
         </span>
         <span className="ml-auto font-mono text-[10px] text-[#878da1]">{PLAN_DATE}</span>
       </Card>
 
-      {/* Planning Quality Dashboard (Phase 6) */}
-      <div className="mb-3">
+      {/* What will this plan do? — the operational consequence of approval */}
+      <div className="order-5">
         <PlanningQualityDashboard
           metrics={qualityMetrics}
-          title="Plan Quality Assessment"
+          title="What will this plan do?"
           plannerStatus={qualityMetrics.plannerStatus ?? "Optimal"}
           sourceHint={
             plannerResult?.source.status === "live"
-              ? "FastAPI Solver · Real-time Operational Telemetry"
-              : "Authority Review · Recommended Plan r3 Evaluation"
+              ? "Demo data · CP-SAT planner · synthetic railway scenario"
+              : "Demo data · seeded baseline · synthetic railway scenario"
           }
         />
       </div>
 
-      {/* Officer decision */}
-      <Card className={`p-4 ${locked ? "opacity-90" : "border-[#2e3092]/50"}`}>
+      {/* Issues to review — derived signals the officer should not miss */}
+      <Card className="order-6 px-4 py-3">
+        <div className="mb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">
+          Issues to review
+        </div>
+        {issues.length > 0 ? (
+          <div className="flex flex-wrap gap-x-6 gap-y-1.5">
+            {issues.map((i) => (
+              <span key={i.label} className="inline-flex items-baseline gap-1.5 text-[12px] text-[#4d5468]">
+                <span
+                  className="font-mono text-[17px] font-extrabold"
+                  style={{ color: i.label === "critical backlog" ? "#dc2626" : "#d97706" }}
+                >
+                  {i.n}
+                </span>
+                <span className="font-semibold">{i.label}</span>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="text-[12px] font-semibold text-[#16a34a]">No open issues detected in this plan.</div>
+        )}
+      </Card>
+
+      {/* Officer decision (Level 1) — the human is the final authority */}
+      <Card className={`order-4 p-4 ${locked ? "opacity-90" : "border-[#2e3092]/50"}`}>
         {!rejecting ? (
           <>
-            <div className="mb-3 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">Officer decision</div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="mb-3 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">
+              Officer decision{locked ? " · locked" : ""}
+            </div>
+            <div className="grid grid-cols-[1.5fr_1fr_1fr] gap-2">
               <Button
                 onClick={() => {
                   onAction("Approved", "");
                   void runGovernanceAction("approve", "Approved as recommended");
                 }}
                 disabled={locked || govBusy}
+                className="py-2.5 text-[13px]"
               >
-                Approve
+                Approve plan
               </Button>
               <Button variant="secondary" onClick={() => setModifyOpen(true)} disabled={locked || govBusy}>
-                Modify
+                Modify plan
               </Button>
               <Button variant="danger" onClick={() => setRejecting(true)} disabled={locked || govBusy}>
-                Reject
+                Reject plan
               </Button>
             </div>
             <p className="mt-2.5 text-[11px] leading-relaxed text-[#878da1]">
@@ -426,9 +507,9 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
         )}
       </Card>
 
-      {/* Recent decisions — compact audit trail */}
-      <h3 className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#878da1]">Recent decisions</h3>
-      <Card className="overflow-x-auto">
+      {/* Plan history — officer decisions & versions */}
+      <h3 className="order-8 mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#878da1]">Plan history — decisions &amp; versions</h3>
+      <Card className="order-8 overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-[11px]">
           <thead>
             <tr className="border-b border-[#eef0f6] text-[10px] uppercase tracking-wider text-[#878da1]">
@@ -466,10 +547,11 @@ function ApprovalHistory({ status, locked, decisions, revisedNote, onAction, onT
       {/* Backend audit trail (§38) — immutable, backend-owned reason codes */}
       {backendAudit.length > 0 && (
         <>
-          <h3 className="mb-2 mt-5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
-            Backend audit trail — {PLAN_ID}
+          <h3 className="order-9 mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
+            Audit trail — backend record{" "}
+            <span className="font-mono font-normal normal-case tracking-normal text-[#a2a7ba]">{PLAN_ID}</span>
           </h3>
-          <Card className="overflow-x-auto">
+          <Card className="order-9 overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-[11px]">
               <thead>
                 <tr className="border-b border-[#eef0f6] text-[10px] uppercase tracking-wider text-[#878da1]">

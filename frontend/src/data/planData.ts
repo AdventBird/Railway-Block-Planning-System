@@ -68,6 +68,32 @@ export const recommendedPlan: {
   ],
 };
 
+/**
+ * Train-impact minutes derived from the plan's own impact notes — the single
+ * source for the "train impact" metric shown on every screen (never hard-coded
+ * per component).
+ */
+export const trainImpactMinutes: number = recommendedPlan.trainImpact.reduce((sum, line) => {
+  const matches = line.match(/(\d+)\s*min/g) ?? [];
+  return sum + matches.reduce((s, m) => s + Number(m.match(/\d+/)?.[0] ?? 0), 0);
+}, 0);
+
+/**
+ * Train-impact value for ANY plan's impact rows — the single presentation rule:
+ * stated minutes when the rows carry them (seed notes: "+15 min"), otherwise the
+ * count of affected protected paths (backend rows: "Path protected … on C1").
+ * Never a hard-coded constant: always derived from the rows actually returned.
+ */
+export function trainImpactValue(rows: string[]): string {
+  const minutes = rows.reduce((sum, line) => {
+    const matches = line.match(/(\d+)\s*min/g) ?? [];
+    return sum + matches.reduce((s, m) => s + Number(m.match(/\d+/)?.[0] ?? 0), 0);
+  }, 0);
+  if (minutes > 0) return `${minutes} min`;
+  if (rows.length > 0) return `${rows.length} path${rows.length === 1 ? "" : "s"}`;
+  return "0 min";
+}
+
 // ---------------------------------------------------------------------------
 // Conflicts & explanations — plain language, one per reason category.
 // ---------------------------------------------------------------------------

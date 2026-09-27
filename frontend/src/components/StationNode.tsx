@@ -28,16 +28,24 @@ function StationNode({ data }: NodeProps) {
 
   return (
     <div
-      className="relative h-16 w-40 rounded-xl border border-[#e3e6f0] bg-white px-3 py-2 shadow-[0_4px_16px_rgba(23,26,48,0.10)] transition-shadow duration-200 hover:shadow-[0_8px_24px_rgba(23,26,48,0.16)]"
+      className="relative h-16 w-36 rounded-xl border border-[#e3e6f0] bg-white px-3 py-2 shadow-[0_4px_16px_rgba(23,26,48,0.10)] transition-shadow duration-200 hover:shadow-[0_8px_24px_rgba(23,26,48,0.16)]"
       style={{ borderColor: hasBlocked ? "rgba(220,38,38,0.45)" : "#e3e6f0" }}
       title={`${station.name} (${station.code})`}
     >
-      {/* Edge anchor points */}
-      <Handle id="l" type="target" position={Position.Left} style={handleStyle} isConnectable={false} />
-      <Handle id="r" type="source" position={Position.Right} style={handleStyle} isConnectable={false} />
+      {/* Edge anchor points — all four sides (invisible). The diagram picks
+          the source/target side from the section's direction so vertical and
+          right-to-left legs of the serpentine connect cleanly. */}
+      <Handle id="sL" type="source" position={Position.Left} style={handleStyle} isConnectable={false} />
+      <Handle id="sR" type="source" position={Position.Right} style={handleStyle} isConnectable={false} />
+      <Handle id="sT" type="source" position={Position.Top} style={handleStyle} isConnectable={false} />
+      <Handle id="sB" type="source" position={Position.Bottom} style={handleStyle} isConnectable={false} />
+      <Handle id="tL" type="target" position={Position.Left} style={handleStyle} isConnectable={false} />
+      <Handle id="tR" type="target" position={Position.Right} style={handleStyle} isConnectable={false} />
+      <Handle id="tT" type="target" position={Position.Top} style={handleStyle} isConnectable={false} />
+      <Handle id="tB" type="target" position={Position.Bottom} style={handleStyle} isConnectable={false} />
 
       <div className="flex items-center gap-1.5">
-        <span className="font-mono text-[13px] font-extrabold tracking-wider text-[#171a30]">
+        <span className="font-mono text-[22px] font-extrabold leading-none tracking-wider text-[#171a30]">
           {station.code}
         </span>
         {station.junction && (
@@ -46,7 +54,7 @@ function StationNode({ data }: NodeProps) {
           </span>
         )}
       </div>
-      <div className="mt-0.5 truncate text-[11px] font-medium text-[#4d5468]" title={station.name}>
+      <div className="mt-1 truncate text-[12px] font-medium text-[#4d5468]" title={station.name}>
         {station.name}
       </div>
 

@@ -6,13 +6,12 @@
 // result (GET via getPlannerResult); "Generate Plan" re-runs the backend.
 // ---------------------------------------------------------------------------
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Card, Chip, TierChip, CompatChip, ReasonChip, DeptChip, Button, OK, OK_BG, PRIMARY, PRIMARY_SOFT, WARN, WARN_BG, type ViewId } from "./ui";
+import { Card, Chip, TierChip, CompatChip, ReasonChip, DeptChip, Button, DecisionCard, MetaText, MetricCard, PageHeader, SectionBlock, REASON_META, CRIT, OK, OK_BG, PRIMARY, PRIMARY_SOFT, WARN, WARN_BG, type ViewId } from "./ui";
 import { JobDrawer, WindowDrawer, TrainDrawer, CompatDrawer, ConflictDrawer, ReasonDrawer, type WinRef } from "./drawers";
 import { WeekView, MonthView } from "./PlanningCalendar";
 import { Timeline, TimelineLegend, buildPlanLanes, corridorOfWindowId, type TimelineBar } from "./Timeline";
-import { UtilBar } from "./TimelineUtil";
 import { blockWindows, corridorLabel, existingBlocks, PLAN_DATE } from "../data/opsData";
-import { seedJobOfBackendId, seedWindowOfBackendId } from "../data/idMap";
+import { seedJobOfBackendId, seedWindowOfBackendId, backendWindowOfSeedId } from "../data/idMap";
 import { compatGroups, jobById, jobs, type Job } from "../data/jobsData";
 import { conflictEntries, recommendedPlan, type ReasonCode } from "../data/planData";
 import { occupiedUnion, spanMinutes, type PlanStats } from "../lib/plan";
@@ -232,15 +231,16 @@ export function windowRefOf(id: string, assignments: PlannerAssignment[] = recom
 
 /** Plan stats for ANY assignment set (seed or live), windows derived from ids. */
 function planStatsFor(assignments: PlannerAssignment[]): PlanStats {
-  const usedIds = [...new Set(assignments.map((a) => a.windowId))];
+  // Normalise seed ⇄ backend window ids FIRST so one physical window is never
+  // counted twice (BLK-2026-0432 ≡ W1 — see data/idMap.ts provenance table).
+  const normOf = (id: string): string => seedWindowOfBackendId(id) ?? id;
+  const usedIds = [...new Set(assignments.map((a) => normOf(a.windowId)))];
   const usedMinutes = usedIds.reduce((sum, id) => {
-    const inWin = assignments.filter((a) => a.windowId === id);
+    const inWin = assignments.filter((a) => normOf(a.windowId) === id);
     const proposed = blockWindows.find((w) => w.id === id);
-    const seedId = proposed ? undefined : seedWindowOfBackendId(id);
     const sanctioned =
       existingBlocks.find((b) => b.id === id) ??
-      existingBlocks.find((b) => b.blockId === id) ??
-      existingBlocks.find((b) => b.id === seedId);
+      existingBlocks.find((b) => b.blockId === id);
     const total = proposed
       ? proposed.minutes
       : sanctioned
@@ -251,7 +251,7 @@ function planStatsFor(assignments: PlannerAssignment[]): PlanStats {
     return sum + total;
   }, 0);
   const occupied = usedIds.reduce(
-    (sum, id) => sum + occupiedUnion(assignments.filter((a) => a.windowId === id)),
+    (sum, id) => sum + occupiedUnion(assignments.filter((a) => normOf(a.windowId) === id)),
     0
   );
   const windowMinutes =
@@ -281,6 +281,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   /* ------------------------- Feature 23 · API state ------------------------ */
   const [deferred, setDeferred] = useState<DeferredJob[]>(seedDeferredRows);
   const [deferFilter, setDeferFilter] = useState<DeferralFilter>("all");
+  const [showAllDeferred, setShowAllDeferred] = useState(false);
   const [reasonJobId, setReasonJobId] = useState<string | null>(null);
   const [reasonWindow, setReasonWindow] = useState<WindowDetails | null>(null);
   const [apiAssignments, setApiAssignments] = useState<PlannerAssignment[] | null>(null);
@@ -417,10 +418,21 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   const stats = useMemo(() => planStatsFor(effectiveAssignments), [effectiveAssignments]);
 
   const selected = windowRefOf(selectedId, effectiveAssignments);
-  const selectedJobs = effectiveAssignments.filter((a) => a.windowId === selectedId);
+  /** Window identity across the seed ⇄ backend id bridge (BLK-2026-0432 ≡ W1). */
+  const normWinId = (id: string): string => seedWindowOfBackendId(id) ?? id;
+  const selectedJobs = effectiveAssignments.filter(
+    (a) => normWinId(a.windowId) === normWinId(selectedId)
+  );
   const selectedDepts = [...new Set(selectedJobs.map((a) => a.department ?? jobById(resolveJobId(a.jobId))?.dept ?? "").filter(Boolean))];
+  const impactScope = [
+    selected.corridorId, // backend impact lines reference corridors ("… on C1")
+    normWinId(selectedId),
+    backendWindowOfSeedId(normWinId(selectedId)),
+  ];
   const selectedImpact = planAffectsWindow(selectedId, effectiveAssignments)
-    ? (plannerResult?.trainImpact ?? recommendedPlan.trainImpact).filter((t) => t.includes(selectedId)).length
+    ? (plannerResult?.trainImpact ?? recommendedPlan.trainImpact).filter((t) =>
+        impactScope.some((s) => s && t.includes(s))
+      ).length
     : 0;
   const selectedCompat = compatGroups.find((g) => g.corridorId === selected.corridorId);
   const selectedDeferred = deferred.filter((d) => d.corridorId === selected.corridorId);
@@ -436,6 +448,16 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
     () => deferred.filter((row) => matchesDeferralFilter(row, deferFilter)),
     [deferred, deferFilter]
   );
+
+  /** Grouped counts by primary reason code (spec: "3 Train conflict / 2 …"). */
+  const deferredGroupCounts = useMemo(() => {
+    const acc: Record<string, number> = {};
+    for (const row of visibleDeferred) {
+      const code = codesOf(row)[0] ?? "LOWER_PRIORITY";
+      acc[code] = (acc[code] ?? 0) + 1;
+    }
+    return Object.entries(acc).sort((a, b) => b[1] - a[1]);
+  }, [visibleDeferred]);
 
   /** Quality metrics derived from planner API result or synthetic baseline. */
   const qualityMetrics = useMemo<PlannerQualityMetrics>(
@@ -513,18 +535,73 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           )}
         </div>
       )}
-      {/* Planning Quality Dashboard (Phase 6) */}
-      <div className="mb-4">
-        <PlanningQualityDashboard
-          metrics={qualityMetrics}
-          sourceHint={
-            apiSource === "live"
-              ? `CP-SAT Planner · ${apiBaseUrl()}`
-              : "Synthetic Planning Baseline (backend unreachable)"
-          }
-        />
-      </div>
-      <div className="grid gap-3 xl:grid-cols-[300px_minmax(0,1fr)_340px]">
+      {/* PLAN SUMMARY (L1) — the cockpit strip: what is the plan + how to act */}
+      <SectionBlock
+        className="mb-4"
+        title="Plan summary"
+        description={
+          apiSource === "live"
+            ? `CP-SAT planner · ${apiBaseUrl()}`
+            : "Synthetic planning baseline — backend unreachable"
+        }
+        right={<MetaText>{planVersionLabel}</MetaText>}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            <MetricCard
+              label="Scheduled"
+              value={qualityMetrics.jobsScheduled ?? stats.jobs}
+              tone={OK}
+            />
+            <MetricCard
+              label="Deferred"
+              value={qualityMetrics.jobsDeferred ?? deferred.length}
+              tone={WARN}
+            />
+            <MetricCard label="Utilization" value={String(qualityMetrics.blockUtilization)} />
+            <MetricCard
+              label="Critical"
+              value={qualityMetrics.criticalBacklog}
+              tone={CRIT}
+            />
+            <MetricCard
+              label="Train impact"
+              value={String(qualityMetrics.trainImpact)}
+              tone={WARN}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex overflow-hidden rounded-lg border border-[#e3e6f0] bg-white" role="group" aria-label="Objective mode">
+              {OBJECTIVE_MODES.map((m) => (
+                <button
+                  key={m}
+                  onClick={() => {
+                    setObjectiveMode(m);
+                    void regenerate(m);
+                  }}
+                  disabled={planning}
+                  title={
+                    m === "SAFETY_FIRST"
+                      ? "Maximize safety-critical completion"
+                      : m === "BALANCED"
+                        ? "Balance maintenance vs train impact"
+                        : "Minimize operational disruption"
+                  }
+                  className={`focus-primary px-2.5 py-1 text-[10px] font-bold transition-colors duration-200 disabled:opacity-50 ${
+                    objectiveMode === m ? "bg-[#2e3092] text-white" : "text-[#4d5468] hover:bg-[#f5f6fc]"
+                  }`}
+                >
+                  {m === "SAFETY_FIRST" ? "Safety" : m === "BALANCED" ? "Balanced" : "Punctuality"}
+                </button>
+              ))}
+            </div>
+            <Button onClick={() => void regenerate()} disabled={planning}>
+              {planning ? "Planning…" : "Generate Plan"}
+            </Button>
+          </div>
+        </div>
+      </SectionBlock>
+      <div className="grid gap-3 xl:grid-cols-[minmax(260px,26fr)_minmax(0,52fr)_minmax(250px,22fr)]">
         {/* ------------------------------ LEFT ------------------------------ */}
         <Card className="thin-scroll max-h-[600px] overflow-y-auto p-0">
           <div className="sticky top-0 z-10 border-b border-[#eef0f6] bg-white px-4 py-2.5">
@@ -543,24 +620,28 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                     <button
                       key={j.id}
                       onClick={() => setJob(j)}
-                      className="focus-primary block w-full px-4 py-2 text-left transition-colors duration-200 hover:bg-[#f5f6fc]"
+                      className="focus-primary block w-full px-4 py-2.5 text-left transition-colors duration-200 hover:bg-[#f5f6fc]"
                     >
                       <div className="flex items-center gap-2">
                         <TierChip tier={j.tier} compact />
-                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-[#171a30]">
-                          <span className="font-mono text-[10px] text-[#878da1]">{j.id}</span> {j.title}
+                        <span className="font-mono text-[10px] text-[#878da1]">{j.id}</span>
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[#171a30]">
+                          {j.title}
                         </span>
                       </div>
-                      <div className="mt-1 flex items-center gap-2 text-[10px] text-[#878da1]">
-                        <span className="font-semibold text-[#4d5468]">{j.dept}</span>
-                        <span>·</span>
-                        <span className="truncate">{corridorLabel(j.corridorId)}</span>
-                        <span className="ml-auto shrink-0 font-mono">{j.minutes}m</span>
-                      </div>
-                      <div className="mt-0.5 flex items-center gap-2 text-[10px]">
-                        <span className="truncate text-[#878da1]">Due {j.deadline}</span>
-                        {sched && <Chip label={`Scheduled ${sched.start}`} color={OK} bg="#f0fdf4" />}
-                        {def && <ReasonChip code={def.code} />}
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <span className="truncate text-[11px] text-[#878da1]">
+                          {corridorLabel(j.corridorId)} · {j.dept} · {j.minutes} min
+                        </span>
+                        {sched ? (
+                          <span className="shrink-0 rounded border border-[#16a34a]/40 bg-[#f0fdf4] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#16a34a]">
+                            SCHED {sched.start}
+                          </span>
+                        ) : def ? (
+                          <ReasonChip code={def.code} />
+                        ) : (
+                          <span className="shrink-0 text-[10px] text-[#878da1]">Due {j.deadline}</span>
+                        )}
                       </div>
                     </button>
                   );
@@ -575,41 +656,12 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
               <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">Railway timeline</div>
               <div className="text-[10px] text-[#878da1]">22:00 → 08:00 · click any bar for details</div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex gap-1.5 font-mono text-[10px] text-[#878da1]">
-                <span>{stats.jobs} jobs</span>
-                <span>·</span>
-                <span>{stats.windowMinutes} min windows</span>
-                <span>·</span>
-                <span>{stats.utilization}% utilized</span>
-              </div>
-              <div className="flex overflow-hidden rounded-lg border border-[#e3e6f0] bg-white" role="group" aria-label="Objective mode">
-                {OBJECTIVE_MODES.map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      setObjectiveMode(m);
-                      void regenerate(m);
-                    }}
-                    disabled={planning}
-                    title={
-                      m === "SAFETY_FIRST"
-                        ? "Maximize safety-critical completion"
-                        : m === "BALANCED"
-                          ? "Balance maintenance vs train impact"
-                          : "Minimize operational disruption"
-                    }
-                    className={`focus-primary px-2.5 py-1 text-[10px] font-bold transition-colors duration-200 disabled:opacity-50 ${
-                      objectiveMode === m ? "bg-[#2e3092] text-white" : "text-[#4d5468] hover:bg-[#f5f6fc]"
-                    }`}
-                  >
-                    {m === "SAFETY_FIRST" ? "Safety" : m === "BALANCED" ? "Balanced" : "Punctuality"}
-                  </button>
-                ))}
-              </div>
-              <Button onClick={() => void regenerate()} disabled={planning}>
-                {planning ? "Planning…" : "Generate Plan"}
-              </Button>
+            <div className="flex gap-1.5 font-mono text-[10px] text-[#878da1]">
+              <span>{stats.jobs} jobs</span>
+              <span>·</span>
+              <span>{plannerResult?.metrics?.windowMinutes ?? stats.windowMinutes} min windows</span>
+              <span>·</span>
+              <span>{plannerResult?.metrics?.utilization ?? stats.utilization}% utilized</span>
             </div>
           </div>
           <TimelineLegend />
@@ -627,8 +679,9 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           </div>
         </Card>
         {/* Feature 18 — factual objective-mode comparison (same input, three
-            weight profiles). Facts only: no mode is declared the winner. */}
-        <Card className="p-4">
+            weight profiles). Facts only: no mode is declared the winner.
+            Sits BELOW the cockpit row and spans full width (order + col-span). */}
+        <Card className="p-4 xl:order-4 xl:col-span-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">
@@ -695,40 +748,20 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           )}
         </Card>
         {/* ------------------------------ RIGHT ----------------------------- */}
-        <div className="space-y-3">
-          <Card className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">Recommended block plan</div>
-              <span className="font-mono text-[10px] font-bold text-[#2e3092]">{planVersionLabel}</span>
-            </div>
-            <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-              <div>
-                <div className="font-mono text-lg font-extrabold leading-none text-[#171a30]">{stats.blocks}</div>
-                <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-[#878da1]">blocks</div>
-              </div>
-              <div>
-                <div className="font-mono text-lg font-extrabold leading-none text-[#171a30]">{stats.jobs}</div>
-                <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-[#878da1]">jobs</div>
-              </div>
-              <div>
-                <div className="font-mono text-lg font-extrabold leading-none text-[#171a30]">{stats.utilization}%</div>
-                <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-[#878da1]">utilized</div>
-              </div>
-            </div>
-            <div className="mt-2">
-              <UtilBar pct={stats.utilization} tone={PRIMARY} />
-            </div>
-          </Card>
-
+        <div className="space-y-3 xl:order-3">
           {/* Selected block decision card */}
-          <Card className="border-[#2e3092]/40 p-4">
-            <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#878da1]">Recommended block</div>
+          <DecisionCard
+            title="Recommended block"
+            badge={<MetaText>{planVersionLabel}</MetaText>}
+          >
+            <div className="truncate text-[15px] font-bold text-[#171a30]">{corridorLabel(selected.corridorId)}</div>
             <div className="mt-1 flex items-baseline justify-between gap-2">
-              <div className="truncate text-sm font-extrabold text-[#171a30]">{corridorLabel(selected.corridorId)}</div>
-              <span className="shrink-0 font-mono text-[11px] font-bold text-[#2e3092]">{selected.id}</span>
-            </div>
-            <div className="mt-0.5 font-mono text-[11px] text-[#4d5468]">
-              {selected.start}–{selected.end} · {selected.minutes} min
+              <span className="font-mono text-[19px] font-bold leading-none text-[#2e3092]">
+                {selected.start}–{selected.end}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] font-bold text-[#878da1]">
+                {selected.id} · {selected.minutes} min
+              </span>
             </div>
             <div className="mt-2.5 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg border border-[#e3e6f0] px-1 py-1.5">
@@ -890,7 +923,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                 Simulate
               </Button>
             </div>
-          </Card>
+          </DecisionCard>
           {/* Compatibility groups — compact list */}
           <Card className="p-0">
             <div className="border-b border-[#eef0f6] px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">
@@ -929,6 +962,15 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
               </span>
             )}
           </div>
+          {/* Grouped counts — the story of WHY work is deferred, at a glance */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-[#eef0f6] px-4 py-2">
+            {deferredGroupCounts.map(([code, n]) => (
+              <span key={code} className="inline-flex items-baseline gap-1.5 text-[11px] text-[#4d5468]">
+                <span className="font-mono text-[13px] font-bold text-[#171a30]">{n}</span>
+                <span className="font-semibold">{REASON_META[code]?.label ?? code}</span>
+              </span>
+            ))}
+          </div>
           {/* Filter chips — compact horizontal filter row above the deferred jobs list */}
           <div
             role="toolbar"
@@ -964,7 +1006,7 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
             })}
           </div>
           <div className="divide-y divide-[#eef0f6]">
-            {visibleDeferred.map((d) => {
+            {visibleDeferred.slice(0, showAllDeferred ? visibleDeferred.length : 3).map((d) => {
               const rowJob = jobById(d.jobId);
               return (
                 <div
@@ -1007,6 +1049,17 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
                 </button>
               </div>
             )}
+            {!showAllDeferred && visibleDeferred.length > 3 && (
+              <div className="border-t border-[#eef0f6] px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAllDeferred(true)}
+                  className="focus-primary inline-flex items-center text-[11px] font-bold text-[#2e3092] hover:underline"
+                >
+                  View all {visibleDeferred.length} deferred jobs →
+                </button>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -1027,8 +1080,16 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
         </Card>
 
         <Card className="p-0">
-          <div className="border-b border-[#eef0f6] px-4 py-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#171a30]">
-            Unused window capacity <span className="text-[#878da1]">· {stats.unusedMinutes} min</span>
+          <div className="border-b border-[#eef0f6] px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#878da1]">
+            Unused capacity{" "}
+            <span className="text-[#a2a7ba]">
+              ·{" "}
+              {blockWindows.reduce(
+                (sum, w) => sum + Math.max(0, w.minutes - occupiedUnionOf(w.id, effectiveAssignments)),
+                0
+              )}{" "}
+              min
+            </span>
           </div>
           <div className="divide-y divide-[#eef0f6]">
             {blockWindows.map((w) => {
@@ -1051,6 +1112,18 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
             })}
           </div>
         </Card>
+      </div>
+
+      {/* Plan quality assessment — detailed derived metrics (L2), below the cockpit */}
+      <div className="mt-3">
+        <PlanningQualityDashboard
+          metrics={qualityMetrics}
+          sourceHint={
+            apiSource === "live"
+              ? `CP-SAT planner · ${apiBaseUrl()}`
+              : "Synthetic planning baseline (backend unreachable)"
+          }
+        />
       </div>
 
       {/* ----------------------------- DRAWERS ----------------------------- */}
@@ -1079,17 +1152,16 @@ function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
 
 /** Occupied union minutes for one window (seed id or backend block id). */
 function occupiedUnionOf(windowId: string, assignments: PlannerAssignment[]): number {
-  const direct = assignments.filter((a) => a.windowId === windowId);
-  if (direct.length) return occupiedUnion(direct);
-  const seedId = seedWindowOfBackendId(windowId);
-  return seedId ? occupiedUnion(assignments.filter((a) => a.windowId === seedId)) : 0;
+  const norm = (id: string): string => seedWindowOfBackendId(id) ?? id;
+  const target = norm(windowId);
+  return occupiedUnion(assignments.filter((a) => norm(a.windowId) === target));
 }
 
 /** True when the plan schedules at least one job inside this window. */
 function planAffectsWindow(windowId: string, assignments: PlannerAssignment[]): boolean {
-  if (assignments.some((a) => a.windowId === windowId)) return true;
-  const seedId = seedWindowOfBackendId(windowId);
-  return seedId ? assignments.some((a) => a.windowId === seedId) : false;
+  const norm = (id: string): string => seedWindowOfBackendId(id) ?? id;
+  const target = norm(windowId);
+  return assignments.some((a) => norm(a.windowId) === target);
 }
 
 /** Workspace header — title, planning date, Tonight / Week / Month switch. */
@@ -1100,25 +1172,26 @@ function WorkspaceHeader({ horizon, setHorizon }: { horizon: Horizon; setHorizon
     { id: "month", label: "Month" },
   ];
   return (
-    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h2 className="text-base font-bold tracking-wide text-[#171a30]">Planning Workspace</h2>
-        <p className="mt-0.5 text-xs text-[#878da1]">{PLAN_DATE} · NDLS–BSB trunk · authorize only via Human Approval</p>
-      </div>
-      <div className="flex rounded-lg border border-[#e3e6f0] bg-white p-0.5">
-        {items.map((it) => (
-          <button
-            key={it.id}
-            onClick={() => setHorizon(it.id)}
-            className={`focus-primary rounded-md px-3 py-1 text-[11px] font-bold transition-colors duration-200 ${
-              horizon === it.id ? "bg-[#2e3092] text-white" : "text-[#4d5468] hover:bg-[#f5f6fc]"
-            }`}
-          >
-            {it.label}
-          </button>
-        ))}
-      </div>
-    </div>
+    <PageHeader
+      title="Planning Workspace"
+      subtitle={`${PLAN_DATE} · NDLS–BSB trunk`}
+      meta={<MetaText>AUTHORIZATION: HUMAN APPROVAL ONLY</MetaText>}
+      right={
+        <div className="flex rounded-lg border border-[#e3e6f0] bg-white p-0.5">
+          {items.map((it) => (
+            <button
+              key={it.id}
+              onClick={() => setHorizon(it.id)}
+              className={`focus-primary rounded-md px-3 py-1 text-[11px] font-bold transition-colors duration-200 ${
+                horizon === it.id ? "bg-[#2e3092] text-white" : "text-[#4d5468] hover:bg-[#f5f6fc]"
+              }`}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      }
+    />
   );
 }
 

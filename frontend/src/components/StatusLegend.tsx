@@ -27,46 +27,32 @@ const ROWS: LegendRow[] = [
   { key: "highlight", label: "Highlighted / selected", color: HIGHLIGHT_COLOR, highlight: true },
 ];
 
+// Inline horizontal legend — sits in the toolbar (spec: no floating overlays
+// competing with the map).
 function StatusLegend() {
   return (
-    <div className="pointer-events-auto rounded-xl border border-[#e3e6f0] bg-white/95 px-3.5 py-3 shadow-[0_8px_24px_rgba(23,26,48,0.12)] backdrop-blur-sm">
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#878da1]">
-        Track Status Legend
-      </div>
-      <div className="grid gap-1.5">
-        {ROWS.map((row) => (
-          <div key={row.key} className="flex items-center gap-2.5">
-            <svg width="34" height="8" className="shrink-0">
-              {row.highlight && (
-                <line
-                  x1="1"
-                  y1="4"
-                  x2="33"
-                  y2="4"
-                  stroke={row.color}
-                  strokeWidth={7}
-                  strokeLinecap="round"
-                  opacity={0.25}
-                />
-              )}
-              <line
-                x1="1"
-                y1="4"
-                x2="33"
-                y2="4"
-                stroke={row.color}
-                strokeWidth={row.highlight ? 2.5 : 3}
-                strokeLinecap="round"
-                strokeDasharray={row.dashed ? "6 4" : undefined}
-                className={row.pulse ? "track-edge-pulse" : undefined}
-              />
-            </svg>
-            <span className="whitespace-nowrap text-[11px] font-medium text-[#4d5468]">
-              {row.label}
-            </span>
-          </div>
-        ))}
-      </div>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {ROWS.map((row) => (
+        <span key={row.key} className="inline-flex items-center gap-1.5" title={row.label}>
+          <svg width="20" height="7" className="shrink-0">
+            {row.highlight && (
+              <line x1="1" y1="3.5" x2="19" y2="3.5" stroke={row.color} strokeWidth={6} strokeLinecap="round" opacity={0.25} />
+            )}
+            <line
+              x1="1"
+              y1="3.5"
+              x2="19"
+              y2="3.5"
+              stroke={row.color}
+              strokeWidth={row.highlight ? 2.5 : 3}
+              strokeLinecap="round"
+              strokeDasharray={row.dashed ? "6 4" : undefined}
+              className={row.pulse ? "track-edge-pulse" : undefined}
+            />
+          </svg>
+          <span className="whitespace-nowrap text-[10px] font-medium text-[#4d5468]">{row.label}</span>
+        </span>
+      ))}
     </div>
   );
 }

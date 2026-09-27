@@ -437,7 +437,11 @@ export async function getPlannerResult(mode: PlannerObjectiveMode = "BALANCED"):
           assignments: enrichAssignments(assignments),
           deferred,
           trainImpact:
-            pickStringList(record, "train_impact", "trainImpact") ?? [],
+            pickStringList(record, "train_impact", "trainImpact") ??
+            // Backend nests its impact rows inside metrics — surface them here
+            // so every screen explains impact from the SAME backend rows.
+            pickStringList(asRecord(record.metrics), "train_impact", "trainImpact") ??
+            [],
           resources: pickStringList(record, "resources") ?? [],
           metrics: deriveMetrics(toPlanAssignments(assignments), deferred.length),
           source: setSource("live", endpoint),
@@ -446,13 +450,23 @@ export async function getPlannerResult(mode: PlannerObjectiveMode = "BALANCED"):
         // Backend metric pass-through (interval-union arithmetic owned there).
         const metricsRecord = asRecord(record.metrics);
         if (metricsRecord["occupied_minutes"] !== undefined) {
+          const prior: PlannerMetrics = result.metrics ?? {};
+          const occupied = pickNumber(metricsRecord, "occupied_minutes");
+          const totalWindow = pickNumber(metricsRecord, "total_window_minutes");
           result.metrics = {
-            ...result.metrics,
-            occupiedMinutes: pickNumber(metricsRecord, "occupied_minutes"),
-            blocks: pickNumber(metricsRecord, "blocks"),
+            ...prior,
+            occupiedMinutes: occupied ?? prior.occupiedMinutes,
+            blocks: pickNumber(metricsRecord, "blocks") ?? prior.blocks,
             scheduled: pickNumber(metricsRecord, "scheduled"),
             deferred: pickNumber(metricsRecord, "deferred"),
-            utilization: pickNumber(metricsRecord, "utilization"),
+            utilization: pickNumber(metricsRecord, "utilization") ?? prior.utilization,
+            // Window capacity is owned by the backend too — otherwise the same
+            // plan shows two different denominators on two screens.
+            windowMinutes: totalWindow ?? prior.windowMinutes,
+            unusedMinutes:
+              totalWindow !== undefined && occupied !== undefined
+                ? Math.max(0, totalWindow - occupied)
+                : prior.unusedMinutes,
           };
         }
         return result;

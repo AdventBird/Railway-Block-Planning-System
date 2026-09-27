@@ -14,6 +14,7 @@ import Assistant, { type AssistantScenario } from "./components/PlanningAssistan
 import Landing from "./components/Landing";
 import { currentUser, signOut, type Officer } from "./auth";
 import { seedDecisions, type DecisionEntry } from "./data/planData";
+import { seedWindowOfBackendId } from "./data/idMap";
 import { PLAN_VERSION } from "./data/opsData";
 import { CRIT, OK, PRIMARY, WARN, type ViewId } from "./components/ui";
 
@@ -198,14 +199,15 @@ export default function App() {
         {/* Topbar */}
         <header className="flex items-center justify-between gap-3 border-b border-[#e3e6f0] bg-white px-4 py-2.5 lg:px-6">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="hidden font-mono text-[10px] text-[#878da1] sm:block">{PLAN_VERSION}</span>
+            {/* Plan status is the Level-1 signal; version is Level-3 metadata. */}
             <span
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider"
+              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-[11px] font-extrabold uppercase tracking-wider"
               style={{ color: tone, background: `${tone}18`, border: `1px solid ${tone}44` }}
             >
               <span className={`h-1.5 w-1.5 rounded-full ${pending ? "animate-pulse" : ""}`} style={{ background: tone }} />
               {effectiveStatus}
             </span>
+            <span className="hidden font-mono text-[10px] text-[#a2a7ba] sm:block">{PLAN_VERSION}</span>
             <select
               value={view}
               onChange={(e) => navigate(e.target.value as ViewId)}
@@ -237,7 +239,12 @@ export default function App() {
             )}
             {view === "network" && (
               <div className="h-[calc(100vh-150px)] min-h-[520px] overflow-hidden rounded-2xl border border-[#e3e6f0] bg-white shadow-[0_10px_40px_-16px_rgba(23,26,48,0.25)]">
-                <NetworkDiagram />
+                <NetworkDiagram
+                  onShowPlanningImpact={(blockId) => {
+                    setFocusWindow(seedWindowOfBackendId(blockId) ?? "W1");
+                    navigate("workspace");
+                  }}
+                />
               </div>
             )}
             {view === "workspace" && (

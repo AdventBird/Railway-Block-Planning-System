@@ -12,7 +12,7 @@ import {
   Card,
   Collapse,
   TierChip,
-  SectionHeader,
+  PageHeader,
   CRIT,
   NEUTRAL,
   OK,
@@ -106,11 +106,13 @@ export interface SimResourceTransition {
   iconType: "wagon" | "crew" | "power" | "machine";
 }
 
-const mins = (a: string, b: string): number =>
-  Math.round(
-    (new Date(`2000-01-01T${b}`).getTime() - new Date(`2000-01-01T${a}`).getTime()) /
-      60000
-  );
+const mins = (a: string, b: string): number => {
+  const raw =
+    (new Date(`2000-01-01T${b}`).getTime() - new Date(`2000-01-01T${a}`).getTime()) / 60000;
+  // Circular 24-hour clock: end < start means the interval crosses midnight,
+  // so durations are always normalized into [0, 1440) — never negative.
+  return ((raw % 1440) + 1440) % 1440;
+};
 
 /* ------------------------------------------------------------------------ */
 /* Live replan bridge (§33 / §24)                                            */
@@ -723,7 +725,7 @@ interface SimulationProps {
 }
 
 export function Simulation({ initialScenario, onSendToApproval }: SimulationProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(initialScenario ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialScenario ?? SCENARIOS[0]?.id ?? null);
   const [ran, setRan] = useState(false);
   const [sent, setSent] = useState(false);
 
@@ -1133,16 +1135,28 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
   const activeCorridor = scenario?.affectedCorridor;
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4">
       <ToastContainer />
 
-      <SectionHeader
-        title="Simulation & Operational Replay Studio"
-        subtitle="Step through dynamic operational disruptions: BEFORE (r1) → EVENT → AFTER (r2) with interactive timeline scrubber and corridor highlight."
-      />
+      {/* Page header — what happened, what this screen is for */}
+      <div className="order-1">
+        <PageHeader
+          title="Simulation"
+          subtitle={
+            scenario
+              ? `${scenario.label} — ${scenario.detail}`
+              : "Choose an operational event to step through BEFORE → EVENT → AFTER."
+          }
+          meta={
+            scenario
+              ? `Corridor ${scenario.affectedCorridor} · baseline plan r1 → revised plan r2 · officer approves before activation`
+              : "Replay never modifies the live plan until the officer sends it to approval"
+          }
+        />
+      </div>
 
-      {/* Scenario picker */}
-      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-5">
+      {/* Compact scenario selector — selected event emphasized */}
+      <div className="order-2 flex flex-wrap items-center gap-2">
         {SCENARIOS.map((sc) => {
           const on = selectedId === sc.id;
           return (
@@ -1162,47 +1176,36 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
                 setReplanError(null);
                 toast.info("Scenario Selected", sc.label);
               }}
-              className={`hover-lift group focus-primary rounded-xl border p-3 text-left transition-all duration-200 ${
+              className={`focus-primary inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[11px] font-bold transition-colors duration-200 ${
                 on
-                  ? "border-[#2e3092] bg-[#eef0fa] shadow-sm ring-1 ring-[#2e3092]/30"
-                  : "border-[#e3e6f0] bg-white hover:border-[#c9cde8]"
+                  ? "border-[#2e3092] bg-[#2e3092] text-white shadow-xs"
+                  : "border-[#e3e6f0] bg-white text-[#4d5468] hover:border-[#c9cde8] hover:text-[#171a30]"
               }`}
             >
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[11px] font-extrabold text-[#171a30] transition-colors group-hover:text-[#2e3092]">
-                  {on ? "✓ " : "+ "}
-                  {sc.label}
-                </span>
-                <span className="rounded bg-[#171a30]/5 px-1 py-0.5 font-mono text-[8px] font-bold text-[#4d5468]">
-                  {sc.affectedCorridor}
-                </span>
-              </div>
-              <p className="mt-1 text-[10px] leading-snug text-[#878da1] line-clamp-2">
-                {sc.detail}
-              </p>
+              <span aria-hidden>{on ? "✓" : "•"}</span>
+              {sc.label}
+              <span
+                className={`font-mono text-[9px] font-semibold ${
+                  on ? "text-white/70" : "text-[#a2a7ba]"
+                }`}
+              >
+                {sc.affectedCorridor}
+              </span>
             </button>
           );
         })}
       </div>
 
       {/* Phase 8 — ONE scenario registry: the backend's canonical scenarios,
-          executed by the backend itself via POST /api/scenarios/run. */}
+          executed by the backend itself via POST /api/scenarios/run.
+          Technical/architecture context — demoted to the bottom (spec). */}
       {backendScenarios.length > 0 && (
-        <Card className="p-4 bg-white">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#171a30]">
-                Canonical Scenario Registry (backend-defined)
-              </span>
-              <span className="rounded bg-[#f1f3f9] px-1.5 py-0.5 font-mono text-[9px] font-bold text-[#4d5468]">
-                POST /api/scenarios/run
-              </span>
-            </div>
-            {registryError && (
-              <span className="text-[10px] font-semibold text-[#92400e]">{registryError}</span>
-            )}
-          </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="order-10">
+          {registryError && (
+            <div className="mb-1.5 text-[10px] font-semibold text-[#92400e]">{registryError}</div>
+          )}
+          <Collapse title="Backend scenario registry — canonical scenarios · POST /api/scenarios/run">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {backendScenarios.map((meta) => {
               const busy = registryBusy === meta.id;
               const result = registryRun as
@@ -1280,16 +1283,19 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
                 </div>
               );
             })}
-          </div>
-        </Card>
+            </div>
+          </Collapse>
+        </div>
       )}
 
       {/* Honest status banners (§29 — never a silent fake) */}
+      {/* Operational state banners — planner loading / backend status / infeasible */}
+      <div className="order-3 flex flex-col gap-4">
       {scenario && beforeLoading && (
         <Card className="border-[#2e3092]/40 bg-[#eef0fa]/60 p-3">
           <div className="flex items-center gap-2 text-[11px] font-bold text-[#2e3092]">
             <span className="h-2 w-2 animate-pulse rounded-full bg-[#2e3092]" />
-            Loading the real planner result (POST /api/planner/run) as the BEFORE plan…
+            Loading the live CP-SAT plan as the BEFORE plan…
           </div>
         </Card>
       )}
@@ -1358,10 +1364,11 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
           </div>
         </Card>
       )}
+      </div>
 
       {/* Configuration & Replay Studio Bar */}
       {scenario && (
-        <Card className="border-[#2e3092]/40 bg-white p-4 shadow-sm">
+        <Card className="order-5 border-[#2e3092]/40 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#eef0f6] pb-3">
             <div>
               <div className="flex items-center gap-2">
@@ -1532,7 +1539,7 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
 
       {/* Target Corridor Visual Highlight Strip */}
       {scenario && (
-        <Card className="p-4 bg-white">
+        <Card className="order-6 p-4 bg-white">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#878da1]">
@@ -1594,7 +1601,7 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
 
       {/* Interactive Timeline Playback with moving indicator */}
       {scenario && (
-        <Card className="p-4 bg-white">
+        <Card className="order-7 p-4 bg-white">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Clock size={14} className="text-[#2e3092]" />
@@ -1747,9 +1754,11 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
         </Card>
       )}
 
-      {/* Dynamic Resource Reallocation Transitions */}
+      {/* Dynamic Resource Reallocation Transitions — demoted technical detail */}
+      <div className="order-8">
       {scenario && stage >= 2 && (
-        <Card className="p-4 bg-white">
+        <Collapse title="How did the system respond? — dynamic resource & machinery transitions">
+          <div className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Wrench size={14} className="text-[#2e3092]" />
@@ -1808,12 +1817,16 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
               );
             })}
           </div>
-        </Card>
+        </div>
+        </Collapse>
       )}
+      </div>
 
       {/* Progressive Conflict Reveal Panel */}
+      <div className="order-9">
       {scenario && stage >= 3 && scenario.conflicts.length > 0 && (
-        <Card className="border-[#d97706]/40 bg-[#fffbeb]/40 p-4">
+        <Collapse title="How did the system respond? — conflicts detected & resolution rules" defaultOpen>
+          <div className="border-[#d97706]/40 bg-[#fffbeb]/40 p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShieldAlert size={15} className="text-[#d97706]" />
@@ -1858,13 +1871,15 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
               </div>
             ))}
           </div>
-        </Card>
+        </div>
+        </Collapse>
       )}
+      </div>
 
       {/* Result — BEFORE → EVENT → AFTER (§14 Core Flow) */}
-      {scenario && ran && after && (
+      {scenario && (
         <>
-          <div className="grid gap-3 lg:grid-cols-3">
+          <div className="order-4 grid gap-3 lg:grid-cols-3">
             <StatBlock label="Before (Baseline r1)" stats={baseStats} tone={NEUTRAL} />
 
             <Card className="border-[#d97706]/50 bg-[#fffbeb] p-4">
@@ -1891,21 +1906,40 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
               </p>
             </Card>
 
-            <StatBlock
-              label={
-                replanResult
-                  ? `After (Revised ${replanResult.plan_version} — live CP-SAT)`
-                  : "After (Revised r2 — scripted projection)"
-              }
-              stats={after.stats}
-              tone={PRIMARY}
-              highlight
-            />
+            {ran && after ? (
+              <StatBlock
+                label={
+                  replanResult
+                    ? `After (Revised ${replanResult.plan_version} — live CP-SAT)`
+                    : "After (Revised r2 — scripted projection)"
+                }
+                stats={after.stats}
+                tone={PRIMARY}
+                highlight
+              />
+            ) : (
+              <Card className="flex flex-col justify-between border-dashed border-[#2e3092]/40 bg-[#eef0fa]/40 p-4">
+                <div>
+                  <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#2e3092]">
+                    After (revised plan r2)
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-[#4d5468]">
+                    Not computed yet — the event has not been applied. Run the replay or
+                    fast-forward to r2 to re-solve the plan with CP-SAT.
+                  </p>
+                </div>
+                <Button className="mt-3 self-start" onClick={() => handleStartReplay()}>
+                  Compute revised plan →
+                </Button>
+              </Card>
+            )}
           </div>
 
+          {ran && after && (
+          <>
           {/* Planning Quality Dashboard for Simulated Scenario */}
           {simulatedQualityMetrics && (
-            <div>
+            <div className="order-4">
               <PlanningQualityDashboard
                 metrics={simulatedQualityMetrics}
                 title={`Simulated Plan Quality · ${scenario.label}`}
@@ -1920,15 +1954,15 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
                 }
                 sourceHint={
                   replanResult
-                    ? `POST /api/replan · ${replanResult.plan_version} · live CP-SAT`
-                    : "Simulated Replan Engine · scripted fallback · Advisory Only"
+                    ? `Live replan · ${replanResult.plan_version} · CP-SAT solver`
+                    : "Simulated replan · scripted fallback · advisory only"
                 }
               />
             </div>
           )}
 
           {/* Before vs After Granular Comparison */}
-          <Card className="p-4 bg-white">
+          <Card className="order-4 p-4 bg-white">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#eef0f6] pb-3 mb-3">
               <div>
                 <h3 className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#171a30]">
@@ -2039,7 +2073,7 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
           </Card>
 
           {/* Send the revised plan onward — the officer still approves it */}
-          <Card className="flex flex-wrap items-center justify-between gap-3 border-[#2e3092]/40 bg-white p-4 shadow-sm">
+          <Card className="order-4 flex flex-wrap items-center justify-between gap-3 border-[#2e3092]/40 bg-white p-4 shadow-sm">
             <div>
               <div className="text-xs font-bold text-[#171a30]">
                 Revised plan (r2) ready for authorization
@@ -2066,11 +2100,13 @@ export function Simulation({ initialScenario, onSendToApproval }: SimulationProp
               {sent ? "Sent to approval ✓" : "Send revised plan to approval →"}
             </Button>
           </Card>
+          </>
+          )}
         </>
       )}
 
       {!scenario && (
-        <Card className="p-10 text-center text-xs italic text-[#878da1]">
+        <Card className="order-3 p-10 text-center text-xs italic text-[#878da1]">
           Select an operational event above to initiate interactive replay and conflict evaluation.
         </Card>
       )}

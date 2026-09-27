@@ -6,7 +6,7 @@
 import type { CSSProperties } from "react";
 import { blockWindows, corridors, existingBlocks, trains } from "../data/opsData";
 import { jobById } from "../data/jobsData";
-import { seedWindowOfBackendId } from "../data/idMap";
+import { seedJobOfBackendId, seedWindowOfBackendId } from "../data/idMap";
 import { recommendedPlan } from "../data/planData";
 import { spanMinutes } from "../lib/plan";
 import type { PlannerAssignment } from "../api/types";
@@ -32,6 +32,7 @@ export interface TimelineBar {
   end: string;
   winId?: string; // set for window / block / job bars → opens the window drawer
   trainId?: string; // set for train bars → opens the train drawer
+  row?: number; // job bars: stagger track (0/1) so concurrent work never overlaps
 }
 
 export interface TimelineLane {
@@ -39,6 +40,8 @@ export interface TimelineLane {
   label: string;
   line: string;
   bars: TimelineBar[];
+  /** Job tracks used in this lane (0–4) — drives the data-driven lane height. */
+  jobTracks: number;
 }
 
 /**
@@ -122,25 +125,48 @@ export function buildPlanLanes(
           winId: b.id,
         })
       );
-    assignments.forEach((a) => {
-      if (corridorOfWindowId(a.windowId, a) !== c.id) return;
-      const job = jobById(a.jobId);
-      bars.push({
-        key: `job-${a.jobId}`,
-        kind: "job",
-        label: job ? `${a.jobId} ${job.title.split(/[—(]/)[0].trim()}` : a.jobId,
-        sub: a.parallel ? "parallel" : undefined,
-        start: a.start,
-        end: a.end,
-        winId: a.windowId,
-      });
-    });
-    return { id: c.id, label: c.label, line: c.line, bars };
+    // Concurrent jobs stagger onto up to four vertical tracks — a fully bundled
+    // window (4 parallel jobs, Feature 13) still reads without label collisions.
+    const jobTracks = pushJobBars(assignments, c.id, bars);
+    return { id: c.id, label: c.label, line: c.line, bars, jobTracks };
   });
 }
 
-/** Compact lanes for the Command Center: windows + trains + existing blocks. */
-export function buildSummaryLanes(): TimelineLane[] {
+/**
+ * Push plan jobs for one corridor onto up to four staggered vertical tracks.
+ * Returns how many tracks were used (0–4) so lanes can size themselves.
+ */
+function pushJobBars(assignments: PlannerAssignment[], corridorId: string, bars: TimelineBar[]): number {
+  const tracks: { s: number; e: number }[][] = [[], [], [], []];
+  assignments.forEach((a) => {
+    if (corridorOfWindowId(a.windowId, a) !== corridorId) return;
+    // Works for raw backend ids (Command Center) and seed-enriched ids (Workspace).
+    const job = jobById(a.jobId) ?? jobById(seedJobOfBackendId(a.jobId) ?? a.jobId);
+    const s = spanMinutes("22:00", a.start);
+    const rawE = spanMinutes("22:00", a.end);
+    const e = rawE < s ? rawE + SPAN : rawE;
+    let row = tracks.findIndex((track) => track.every((iv) => e <= iv.s || s >= iv.e));
+    if (row === -1) row = 0; // >4 concurrent — degrade to track 0 rather than hiding
+    tracks[row].push({ s, e });
+    bars.push({
+      key: `job-${a.jobId}`,
+      kind: "job",
+      label: job ? `${a.jobId} ${job.title.split(/[—(]/)[0].trim()}` : a.jobId,
+      sub: a.parallel ? "parallel" : undefined,
+      start: a.start,
+      end: a.end,
+      winId: a.windowId,
+      row,
+    });
+  });
+  return tracks.reduce((used, track, i) => (track.length > 0 ? i + 1 : used), 0);
+}
+
+/**
+ * Summary lanes for the Command Center. Accepts live planner assignments so
+ * "Tonight's plan" shows the actual scheduled work, not just the windows.
+ */
+export function buildSummaryLanes(assignments: PlannerAssignment[] = []): TimelineLane[] {
   return corridors.map((c) => {
     const bars: TimelineBar[] = [];
     blockWindows
@@ -180,38 +206,53 @@ export function buildSummaryLanes(): TimelineLane[] {
           winId: b.id,
         })
       );
-    return { id: c.id, label: c.label, line: c.line, bars };
+    const jobTracks = pushJobBars(assignments, c.id, bars);
+    return { id: c.id, label: c.label, line: c.line, bars, jobTracks };
   });
 }
 
 /* ------------------------------- rendering -------------------------------- */
 
-const BAR_STYLE: Record<BarKind, { base: string; style?: CSSProperties }> = {
+const BAR_STYLE: Record<BarKind, { base: string; style?: CSSProperties; text?: string; lead?: string }> = {
+  // BACKGROUND role — quiet dashed capacity strip behind everything.
   window: {
-    base: "inset-y-1.5 border border-dashed border-[#2e3092]/70 bg-[#eef0fa] text-[#2e3092]",
+    base: "inset-y-2 border border-dashed border-[#2e3092]/35 bg-[#eef0fa]/60 text-[#2e3092]/60",
   },
+  // PRIMARY role — scheduled maintenance is the dominant object (tracks set in Bar).
   job: {
-    base: "top-7 bottom-1.5 bg-[#2e3092] text-white",
+    base: "bg-[#2e3092] text-white",
+    text: "text-[10px]",
+    lead: "leading-[13px]",
   },
+  // SECONDARY role — train movements read as outlines, never solid.
   passenger: {
     base: "top-1 h-5 text-[#166534]",
     style: { background: "rgba(22,163,74,0.14)", border: "1px solid rgba(22,163,74,0.65)" },
+    text: "text-[9px]",
   },
   freight: {
     base: "top-1 h-5 text-[#4d5468]",
     style: { background: "rgba(100,116,139,0.16)", border: "1px solid rgba(100,116,139,0.6)" },
+    text: "text-[9px]",
   },
+  // EXCEPTION role — protected/special movements stay unmistakable.
   special: {
     base: "top-1 h-5 text-white",
     style: { background: "#dc2626" },
+    text: "text-[9px]",
   },
+  // SUBTLE role — sanctioned blocks sit quietly on their own slim band.
   "block-approved": {
-    base: "bottom-1.5 h-5 text-[#4d5468]",
-    style: { background: "rgba(148,163,184,0.28)", border: "1px solid rgba(100,116,139,0.55)" },
+    base: "top-[25px] h-[9px] text-[#94a3b8]",
+    style: { background: "rgba(148,163,184,0.22)", border: "1px solid rgba(100,116,139,0.35)" },
+    text: "text-[8px]",
+    lead: "leading-[9px]",
   },
   "block-pending": {
-    base: "bottom-1.5 h-5 text-[#b45309]",
-    style: { background: "rgba(217,119,6,0.18)", border: "1px solid rgba(217,119,6,0.6)" },
+    base: "top-[25px] h-[9px] text-[#b45309]",
+    style: { background: "rgba(217,119,6,0.14)", border: "1px solid rgba(217,119,6,0.5)" },
+    text: "text-[8px]",
+    lead: "leading-[9px]",
   },
 };
 
@@ -227,15 +268,20 @@ function Bar({
   const style: CSSProperties = { left: `${startPct(b.start)}%`, width: `${widthPct(b.start, b.end)}%` };
   const meta = BAR_STYLE[b.kind];
   if (meta.style) Object.assign(style, meta.style);
+  if (b.kind === "job") {
+    // Up to four staggered tracks below trains/blocks (lane is 92px tall).
+    style.top = 35 + Math.min(b.row ?? 0, 3) * 14;
+    style.height = 13;
+  }
   const clickable = Boolean(b.winId || b.trainId);
   return (
     <button
       type="button"
       onClick={() => clickable && onPick(b)}
       title={`${b.label}${b.sub ? ` · ${b.sub}` : ""}`}
-      className={`absolute overflow-hidden whitespace-nowrap rounded px-1.5 text-left font-bold leading-5 transition-[filter] duration-150 ${
-        compact ? "text-[8px]" : "text-[9px]"
-      } ${meta.base} ${clickable ? "cursor-pointer hover:z-10 hover:brightness-110" : "cursor-default"}`}
+      className={`absolute overflow-hidden whitespace-nowrap rounded px-1.5 text-left font-bold transition-[filter] duration-150 ${
+        meta.text ?? (compact ? "text-[8px]" : "text-[9px]")
+      } ${meta.lead ?? "leading-5"} ${meta.base} ${clickable ? "cursor-pointer hover:z-10 hover:brightness-110" : "cursor-default"}`}
       style={style}
     >
       {b.label}
@@ -253,7 +299,6 @@ export function Timeline({
   compact?: boolean;
   onPick: (b: TimelineBar) => void;
 }) {
-  const laneHeight = compact ? "h-9" : "h-[64px]";
   const labelWidth = compact ? "w-28" : "w-32";
   return (
     <div>
@@ -273,8 +318,11 @@ export function Timeline({
         </div>
       </div>
 
-      {/* Corridor lanes */}
-      {lanes.map((lane) => (
+      {/* Corridor lanes — height is data-driven: 36px for trains/bands,
+          +14px per job track actually used (0–4). */}
+      {lanes.map((lane) => {
+        const laneH = compact ? 36 : 35 + Math.min(lane.jobTracks ?? 0, 4) * 14 + 1;
+        return (
         <div key={lane.id} className="mb-1.5 flex items-stretch">
           <div className={`${labelWidth} shrink-0 pr-3 text-right`}>
             <div className={`truncate font-bold text-[#171a30] ${compact ? "text-[10px]" : "text-[11px]"}`}>
@@ -282,7 +330,10 @@ export function Timeline({
             </div>
             <div className="text-[9px] uppercase tracking-wider text-[#878da1]">{lane.line} line</div>
           </div>
-          <div className={`relative flex-1 rounded-lg border border-[#e3e6f0] bg-[#fafbfd] ${laneHeight}`}>
+          <div
+            className="relative flex-1 rounded-lg border border-[#e3e6f0] bg-[#fafbfd]"
+            style={{ height: laneH }}
+          >
             {HOURS.map((_, i) => (
               <div
                 key={i}
@@ -295,7 +346,8 @@ export function Timeline({
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -67,8 +67,13 @@ try {
   ok("signed in → command center", (await page.locator("text=Command Center").count()) > 0);
   await shot(page, "02-command");
 
-  // 3 — COMMAND CENTER KPIs
-  ok("command KPIs present", (await page.locator("text=Block windows").count()) > 0);
+  // 3 — COMMAND CENTER KPIs (spec: plan status + action required are the top areas)
+  ok(
+    "command KPIs present",
+    (await page.locator("text=/Plan status/i").count()) > 0 &&
+      (await page.locator("text=/Action required/i").count()) > 0 &&
+      (await page.locator("text=window capacity").count()) > 0
+  );
 
   // 4 — NETWORK view
   await page.locator("button:has-text('Network')").first().click();

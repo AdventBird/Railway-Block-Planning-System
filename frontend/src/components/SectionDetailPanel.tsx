@@ -27,6 +27,8 @@ interface SectionDetailPanelProps {
   activeBlocks: TrackSection[];
   onSelect: (sectionId: string) => void;
   onClose: () => void;
+  /** Deep-link into the planning workspace for this section's active block. */
+  onShowPlanningImpact?: (blockId: string) => void;
 }
 
 function StatusChip({ status }: { status: TrackSection["status"] }) {
@@ -107,7 +109,7 @@ function EmptyState({
   onSelect: (sectionId: string) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col gap-3 px-4 py-4">
+    <div className="thin-scroll flex flex-1 flex-col gap-3 overflow-y-auto border-t border-[#e3e6f0] bg-white px-4 py-4 lg:w-[340px] lg:flex-none lg:border-l lg:border-t-0 xl:w-[372px]">
       <div>
         <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">Network summary</div>
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-[#4d5468]">
@@ -138,7 +140,7 @@ function EmptyState({
   );
 }
 
-function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSelect, onClose }: SectionDetailPanelProps) {
+function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSelect, onClose, onShowPlanningImpact }: SectionDetailPanelProps) {
   if (!section) {
     return <EmptyState summary={summary} activeBlocks={activeBlocks} onSelect={onSelect} />;
   }
@@ -147,7 +149,7 @@ function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSe
   const ops = sectionOps[section.id];
 
   return (
-    <div className="thin-scroll flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
+    <div className="thin-scroll flex flex-1 flex-col gap-3 overflow-y-auto border-t border-[#e3e6f0] bg-white px-4 py-4 lg:w-[340px] lg:flex-none lg:border-l lg:border-t-0 xl:w-[372px]">
       {/* Header — endpoints + identity */}
       <div>
         <div className="flex items-center justify-between gap-2">
@@ -194,6 +196,48 @@ function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSe
         <StatusChip status={section.status} />
       </div>
 
+      {/* Operational summary — always visible (spec: what/why at a glance) */}
+      {block && (
+        <div className="space-y-1.5 rounded-lg border border-[#e3e6f0] bg-[#f8f9fe] px-3 py-2.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Reason</span>
+            <span className="min-w-0 truncate text-right text-[11px] font-semibold text-[#171a30]" title={block.reason}>
+              {block.reason}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Block</span>
+            <span className="font-mono text-right text-[11px] font-semibold text-[#171a30]">
+              {block.startTime}–{block.endTime} IST
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Department</span>
+            <span className="flex items-center gap-1.5">
+              <DeptChip dept={block.requestedBy} />
+              <ApprovalChip status={block.approvalStatus} />
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">Train impact</span>
+            <span
+              className="text-right text-[11px] font-semibold"
+              style={{ color: (ops?.trainImpact ?? 0) > 0 ? "#d97706" : "#16a34a" }}
+            >
+              {ops ? `${ops.trainImpact} movement${ops.trainImpact === 1 ? "" : "s"}` : "—"}
+            </span>
+          </div>
+          {onShowPlanningImpact && (
+            <button
+              onClick={() => onShowPlanningImpact(block.blockId)}
+              className="focus-primary mt-1.5 inline-flex items-center gap-1 text-[11px] font-bold text-[#2e3092] hover:underline"
+            >
+              View planning impact →
+            </button>
+          )}
+        </div>
+      )}
+
       {/* At-a-glance tiles */}
       <div className="grid grid-cols-3 gap-2">
         <Tile label="Active block" value={block ? block.blockId : "—"} tone={block ? "#d97706" : "#a2a7ba"} />
@@ -205,20 +249,9 @@ function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSe
         />
       </div>
 
-      {/* Progressive disclosure — details on demand */}
+      {/* Progressive disclosure — technical detail on demand */}
       <div className="space-y-2">
-        {block ? (
-          <Collapse title="Maintenance">
-            <p className="leading-relaxed">{block.reason}</p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[10px] text-[#878da1]">
-                {block.startTime}–{block.endTime} IST
-              </span>
-              <DeptChip dept={block.requestedBy} />
-              <ApprovalChip status={block.approvalStatus} />
-            </div>
-          </Collapse>
-        ) : (
+        {!block && (
           <div className="rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-2 text-[11px] leading-relaxed text-[#166534]">
             No block in force on this section.
             {section.status === "caution" && " Caution order in effect — restricted speed."}
@@ -227,7 +260,7 @@ function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSe
         )}
         {ops?.compat && <Collapse title="Compatibility">{ops.compat}</Collapse>}
         {ops && (
-          <Collapse title="Train impact">
+          <Collapse title="Train impact detail">
             {ops.trainImpact > 0 ? (
               <p className="leading-relaxed">
                 {ops.trainImpact} movement{ops.trainImpact > 1 ? "s" : ""} affected.
@@ -242,7 +275,7 @@ function SectionDetailPanel({ section, stationsById, summary, activeBlocks, onSe
         {ops?.history && <Collapse title="History">{ops.history}</Collapse>}
       </div>
 
-      <p className="mt-auto text-[10px] text-[#a2a7ba]">Simulated telemetry — swap the mock feed for the live block registry later.</p>
+      <p className="mt-auto text-[10px] text-[#a2a7ba]">Synthetic demo data · block registry is simulated.</p>
     </div>
   );
 }

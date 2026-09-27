@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
-  Panel,
   ReactFlowProvider,
   useReactFlow,
   type Edge,
@@ -53,12 +52,19 @@ function matchesQuery(
   );
 }
 
-function DiagramInner() {
+function DiagramInner({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockId: string) => void }) {
   const [clickedId, setClickedId] = useState<string | null>(null);
   const [dismissedId, setDismissedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const { fitView } = useReactFlow();
+
+  // Refit once mounted — the initial `fitView` prop can fire before the node
+  // measurements settle, leaving the schematic small with dead space around it.
+  useEffect(() => {
+    const t = setTimeout(() => fitView({ padding: 0.1, maxZoom: 1.6, duration: 0 }), 120);
+    return () => clearTimeout(t);
+  }, [fitView]);
 
   const stationsById = useMemo(
     () => Object.fromEntries(mockStations.map((s) => [s.id, s])) as Record<string, Station>,
@@ -128,7 +134,10 @@ function DiagramInner() {
     });
   }, []);
 
-  // Edges: UP/DOWN lane offsets + search/filter dimming + selection highlight
+  // Edges: orientation-aware handles + UP/DOWN lane offsets + dim/highlight.
+  // Horizontal legs use left/right handles, vertical drops (TDL→CNB, DDU→BSB,
+  // CNB→LKO) use bottom/top handles so the serpentine schematic reads as a
+  // proper control-room line diagram instead of wide bezier bulges.
   const edges = useMemo<Edge<TrackEdgeData>[]>(() => {
     const pairCounts = new Map<string, number>();
     for (const s of mockSections) {
@@ -151,18 +160,40 @@ function DiagramInner() {
       const visualState: TrackEdgeData["visualState"] =
         section.id === selectedId ? "highlight" : dimmed ? "dimmed" : "normal";
 
+      // Pick handle anchors from the geometry of the two endpoint stations.
+      const from = stationsById[section.fromStationId];
+      const to = stationsById[section.toStationId];
+      let sourceHandle = "sR";
+      let targetHandle = "tL";
+      if (from && to) {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        if (Math.abs(dy) >= Math.abs(dx)) {
+          if (dy >= 0) {
+            sourceHandle = "sB";
+            targetHandle = "tT";
+          } else {
+            sourceHandle = "sT";
+            targetHandle = "tB";
+          }
+        } else if (dx < 0) {
+          sourceHandle = "sL";
+          targetHandle = "tR";
+        }
+      }
+
       return {
         id: section.id,
         source: section.fromStationId,
         target: section.toStationId,
-        sourceHandle: "r",
-        targetHandle: "l",
+        sourceHandle,
+        targetHandle,
         type: "track" as const,
         zIndex: visualState === "highlight" ? 400 : 0,
         data: { section, laneOffset, visualState, onSelect: handleSelect },
       };
     });
-  }, [searchMatches, statusFilter, selectedId, handleSelect]);
+  }, [searchMatches, statusFilter, selectedId, handleSelect, stationsById]);
 
   const summary = useMemo(
     () => ({
@@ -187,11 +218,9 @@ function DiagramInner() {
   const matchCount = searchQuery.trim() ? searchMatches.size : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden lg:flex-row">
-      {/* Canvas column (~70% width on desktop) */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Search + status filter bar */}
-        <div className="flex flex-col gap-3 border-b border-[#e3e6f0] bg-white px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="relative flex h-full w-full flex-col overflow-hidden">
+      {/* Toolbar — full width: search · status filters · fit view */}
+      <div className="flex flex-col gap-3 border-b border-[#e3e6f0] bg-white px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <div className="relative w-full min-w-0 max-w-xs">
               <svg
@@ -261,18 +290,22 @@ function DiagramInner() {
               );
             })}
             <span className="mx-1 hidden h-4 w-px bg-[#e3e6f0] sm:block" />
+            <div className="ml-auto hidden items-center md:flex">
+              <StatusLegend />
+            </div>
             <button
-              onClick={() => fitView({ padding: 0.15, duration: 300 })}
+              onClick={() => fitView({ padding: 0.1, maxZoom: 1.6, duration: 300 })}
               className="rounded-lg border border-[#e3e6f0] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4d5468] transition-colors duration-200 hover:bg-[#f5f6fc] hover:text-[#171a30]"
               title="Reset view"
             >
               Fit view
             </button>
           </div>
-        </div>
+      </div>
 
-        {/* React Flow canvas */}
-        <div className="min-h-0 flex-1">
+      {/* Map canvas (dominant ~70%) + inspector (narrow fixed column) */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <div className="min-h-0 min-w-0 flex-1">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -284,7 +317,7 @@ function DiagramInner() {
               if (d?.section?.id) handleSelect(d.section.id);
             }}
             fitView
-            fitViewOptions={{ padding: 0.18, maxZoom: 1 }}
+            fitViewOptions={{ padding: 0.1, maxZoom: 1.6 }}
             minZoom={0.35}
             maxZoom={1.75}
             nodesDraggable={false}
@@ -294,30 +327,28 @@ function DiagramInner() {
           >
             <Background color="#dde1ee" gap={22} size={1} />
             <Controls position="top-right" showInteractive={false} />
-            <Panel position="bottom-left">
-              <StatusLegend />
-            </Panel>
           </ReactFlow>
         </div>
-      </div>
 
-      {/* Detail panel — 30% column on desktop, bottom sheet on mobile */}
-      <SectionDetailPanel
-        section={selectedSection}
-        stationsById={stationsById}
-        summary={summary}
-        activeBlocks={activeBlocks}
-        onSelect={handleSelect}
-        onClose={closePanel}
-      />
+        {/* Inspector — ~30% column on desktop, stacked sheet on mobile */}
+        <SectionDetailPanel
+          section={selectedSection}
+          stationsById={stationsById}
+          summary={summary}
+          activeBlocks={activeBlocks}
+          onSelect={handleSelect}
+          onClose={closePanel}
+          onShowPlanningImpact={onShowPlanningImpact}
+        />
+      </div>
     </div>
   );
 }
 
-function NetworkDiagram() {
+function NetworkDiagram({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockId: string) => void }) {
   return (
     <ReactFlowProvider>
-      <DiagramInner />
+      <DiagramInner onShowPlanningImpact={onShowPlanningImpact} />
     </ReactFlowProvider>
   );
 }

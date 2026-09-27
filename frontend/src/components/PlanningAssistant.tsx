@@ -114,13 +114,14 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
         </header>
 
         <div className="thin-scroll flex-1 overflow-y-auto p-4">
+          <div className="mb-3 text-[15px] font-bold leading-snug text-[#171a30]">What do you need to plan?</div>
           {/* Ask */}
           <div className="mb-4">
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={3}
-              placeholder="Describe what you need — e.g. reserve a path, find a block, combine compatible work…"
+              placeholder="What do you need to plan? e.g. reserve a path, find a block, combine compatible work…"
               className="focus-primary w-full rounded-lg border border-[#e3e6f0] bg-white px-3 py-2 text-[12px] text-[#171a30] placeholder:text-[#a2a7ba]"
             />
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -147,7 +148,7 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
             <div className="space-y-3">
               <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-[#171a30]">“{asked}”</p>
+                <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-[#171a30]">“{asked}”</p>
               </div>
               <div className="rounded-lg border border-[#fecaca] bg-[#fef2f2] px-3 py-2.5">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[#dc2626]">Cannot help with that</div>
@@ -163,7 +164,7 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
             <div className="space-y-3">
               <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-[#171a30]">“{asked}”</p>
+                <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-[#171a30]">“{asked}”</p>
               </div>
               <Card className="p-3">
                 <div className="mb-2">
@@ -193,21 +194,21 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
             <div className="space-y-3">
               <div className="rounded-lg border border-[#e3e6f0] bg-[#f5f6fc] px-3 py-2">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-[#878da1]">You asked</div>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-[#171a30]">“{asked}”</p>
+                <p className="mt-0.5 text-[13px] font-medium leading-relaxed text-[#171a30]">“{asked}”</p>
               </div>
 
               {step >= 1 && (
                 <Card className="p-3">
                   <div className="mb-2">
-                    <span className="rounded bg-[#2e3092] px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-white">
-                      Request understood
+                    <span className="rounded bg-[#2e3092] px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-white">
+                      Understood
                     </span>
                   </div>
                   <div className="space-y-0.5">
                     {(active === "reserve" ? RESERVE_REQUEST : FIND_REQUEST).map(([k, v]) => (
-                      <div key={k} className="flex items-baseline justify-between gap-3 border-b border-[#eef0f6] py-1 last:border-0">
+                      <div key={k} className="flex items-baseline justify-between gap-3 border-b border-[#eef0f6] py-1.5 last:border-0">
                         <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">{k}</span>
-                        <span className="text-right text-[11px] font-semibold text-[#171a30]">{v}</span>
+                        <span className="text-right text-[13px] font-semibold text-[#171a30]">{v}</span>
                       </div>
                     ))}
                   </div>
@@ -216,7 +217,9 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
 
               {step >= 2 && (
                 <>
-                  <div className="text-[11px] font-bold text-[#16a34a]">✓ Planning scenario prepared.</div>
+                  <div className="flex items-center gap-1.5 text-[12px] font-bold text-[#16a34a]">
+                    <span aria-hidden>✓</span> Planning scenario prepared — nothing runs until you act.
+                  </div>
 
                   <Collapse title="View details — how this will run">
                     {active === "reserve" ? (
@@ -237,7 +240,12 @@ function Assistant({ open, scenario, onClose, onRunPlan, onSimulate }: Assistant
 
                   <div className="grid grid-cols-2 gap-2">
                     {active === "reserve" ? (
-                      <Button onClick={() => onSimulate("relief")}>Run simulation →</Button>
+                      <>
+                        <Button onClick={() => onSimulate("relief")}>Run simulation →</Button>
+                        <Button variant="secondary" onClick={onRunPlan}>
+                          Prepare revised plan →
+                        </Button>
+                      </>
                     ) : (
                       <>
                         <Button onClick={onRunPlan}>Run plan →</Button>

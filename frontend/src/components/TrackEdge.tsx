@@ -56,7 +56,8 @@ function TrackEdge({
     curvature: 0.4,
   });
 
-  const mainWidth = isHi ? 4 : section.status === "occupied" ? 3.25 : 3;
+  // Thicker lines than the previous design — the schematic must read at a glance.
+  const mainWidth = isHi ? 7 : section.status === "occupied" ? 6 : 5;
   const opacity = isDim ? 0.35 : 1;
   const shortLabel = section.line === "UP" ? "UP" : section.line === "DOWN" ? "DN" : "";
 
