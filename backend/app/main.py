@@ -9,10 +9,14 @@ to the seeded synthetic data whenever the API is unreachable.
 
 from __future__ import annotations
 
+import os
 import uvicorn
 
 from backend.app import config
 from backend.app.api.app import app
+
+# Ensure plans persist across restarts when running the operational backend server
+os.environ.setdefault("RBPS_PERSIST_PLANS", "1")
 
 
 def main() -> None:

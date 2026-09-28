@@ -295,3 +295,30 @@ class TestSimulationApiEndpoints:
         after_plan_res = client.get(f"/api/plans/{plan_id}")
         after_plan = after_plan_res.json()["payload"]
         assert len(after_plan.get("revisions", [])) == initial_rev_count
+
+    def test_plan_store_disk_persistence(self, tmp_path):
+        """Verify PlanStore saves and reloads plans and revisions across process restarts."""
+        storage_file = tmp_path / "test_plans.json"
+        store1 = PlanStore(persistence_file=storage_file)
+
+        mock_plan = {
+            "status": "OPTIMAL",
+            "plan_version": "r1",
+            "assignments": [{"jobId": "J-01", "windowId": "W1"}],
+            "deferred_jobs": [],
+            "metrics": {"utilization": 90.0},
+        }
+
+        # Save and approve in store1
+        store1.save_plan(mock_plan, plan_id="PLAN-PERSIST-1", officer="Controller A")
+        store1.act("PLAN-PERSIST-1", "APPROVE", officer="Dy. COM", reason="Night clearance")
+
+        # Simulate process restart by creating a new store reading the same file
+        store2 = PlanStore(persistence_file=storage_file)
+        loaded = store2.get_plan("PLAN-PERSIST-1")
+
+        assert loaded is not None
+        assert loaded["plan_id"] == "PLAN-PERSIST-1"
+        assert loaded["status"] == "APPROVED"
+        assert len(loaded["revisions"]) == 1
+        assert len(store2.audit_history("PLAN-PERSIST-1")) == 2
