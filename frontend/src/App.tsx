@@ -235,13 +235,21 @@ export default function App() {
         <main className="thin-scroll flex-1 overflow-y-auto p-4 lg:p-6">
           <div className="mx-auto max-w-[1400px]">
             {view === "command" && (
-              <CommandCenter onNavigate={navigate} approvalPending={pending} onOpenAssistant={(s) => openAssistant(s)} />
+              <CommandCenter
+                onNavigate={navigate}
+                approvalPending={pending}
+                onOpenAssistant={(s) => openAssistant(s)}
+                onSelectWindow={(winId) => {
+                  setFocusWindow(winId);
+                  navigate("workspace");
+                }}
+              />
             )}
             {view === "network" && (
-              <div className="h-[calc(100vh-150px)] min-h-[520px] overflow-hidden rounded-2xl border border-[#e3e6f0] bg-white shadow-[0_10px_40px_-16px_rgba(23,26,48,0.25)]">
+              <div className="h-[calc(100vh-120px)] min-h-[640px] overflow-hidden rounded-2xl border border-[#e3e6f0] bg-white shadow-sm flex flex-col">
                 <NetworkDiagram
                   onShowPlanningImpact={(blockId) => {
-                    setFocusWindow(seedWindowOfBackendId(blockId) ?? "W1");
+                    setFocusWindow(seedWindowOfBackendId(blockId) ?? blockId ?? "W1");
                     navigate("workspace");
                   }}
                 />
@@ -253,6 +261,7 @@ export default function App() {
             {view === "simulation" && (
               <Simulation
                 initialScenario={simScenario}
+                onNavigate={navigate}
                 onSendToApproval={(note) => {
                   setRevisedNote(note);
                   setPlanStatus("Pending approval");
@@ -268,6 +277,11 @@ export default function App() {
                 revisedNote={revisedNote}
                 onAction={handleAction}
                 onToggleLock={() => setLocked((l) => !l)}
+                onNavigate={navigate}
+                onSelectWindow={(winId) => {
+                  setFocusWindow(winId);
+                  navigate("workspace");
+                }}
               />
             )}
           </div>

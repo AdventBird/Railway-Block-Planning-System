@@ -7,180 +7,211 @@ import ReactFlow, {
   type Edge,
   type Node,
 } from "reactflow";
-import SectionDetailPanel from "./SectionDetailPanel";
-import StationNode, { type StationNodeData } from "./StationNode";
-import StatusLegend from "./StatusLegend";
-import TrackEdge, { type TrackEdgeData } from "./TrackEdge";
-import { mockSections, mockStations } from "../data/mockRailwayData";
-import type { Station, TrackSection, TrackStatus } from "../types";
+import "reactflow/dist/style.css";
 
-const nodeTypes = { station: StationNode };
-const edgeTypes = { track: TrackEdge };
+import StationNode from "./network/StationNode";
+import SectionEdge from "./network/SectionEdge";
+import PathControls from "./network/PathControls";
+import SectionInspector from "./network/SectionInspector";
+import NetworkLegend from "./network/NetworkLegend";
 
-const LANE_GAP = 9; // px between the UP and DOWN parallel lanes
+import {
+  CANONICAL_SECTIONS,
+  CANONICAL_STATIONS,
+  CANONICAL_SECTIONS_BY_ID,
+  DEFAULT_SELECTED_PATH,
+  calculateNetworkLayout,
+  getSectionsForPath,
+} from "../data/networkData";
 
-type StatusFilter = "All" | "Clear" | "Blocked" | "Maintenance";
-
-const FILTER_STATUSES: Record<StatusFilter, TrackStatus[] | null> = {
-  All: null,
-  Clear: ["clear"],
-  Blocked: ["blocked"],
-  Maintenance: ["maintenance"],
+const nodeTypes = {
+  station: StationNode,
 };
 
-const FILTER_CHIP_STYLE: Record<StatusFilter, { dot: string; active: string }> = {
-  All: { dot: "#878da1", active: "border-[#d9ddef] bg-[#f1f3f9] text-[#171a30]" },
-  Clear: { dot: "#16a34a", active: "border-[#16a34a]/60 bg-[#f0fdf4] text-[#166534]" },
-  Blocked: { dot: "#dc2626", active: "border-[#dc2626]/60 bg-[#fef2f2] text-[#991b1b]" },
-  Maintenance: { dot: "#d97706", active: "border-[#d97706]/60 bg-[#fffbeb] text-[#92400e]" },
+const edgeTypes = {
+  sectionEdge: SectionEdge,
 };
 
-function matchesQuery(
-  section: TrackSection,
-  stationsById: Record<string, Station>,
-  q: string
-): boolean {
-  const from = stationsById[section.fromStationId];
-  const to = stationsById[section.toStationId];
-  return (
-    section.name.toLowerCase().includes(q) ||
-    section.id.toLowerCase().includes(q) ||
-    section.status.includes(q) ||
-    (section.line ?? "").toLowerCase().includes(q) ||
-    Boolean(from && (from.name.toLowerCase().includes(q) || from.code.toLowerCase().includes(q))) ||
-    Boolean(to && (to.name.toLowerCase().includes(q) || to.code.toLowerCase().includes(q)))
-  );
+interface NetworkDiagramProps {
+  onShowPlanningImpact?: (blockId: string, date?: string, sectionId?: string, trackId?: string) => void;
 }
 
-function DiagramInner({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockId: string) => void }) {
-  const [clickedId, setClickedId] = useState<string | null>(null);
-  const [dismissedId, setDismissedId] = useState<string | null>(null);
+function DiagramInner({ onShowPlanningImpact }: NetworkDiagramProps) {
+  const [selectedPath, setSelectedPath] = useState<string[]>(DEFAULT_SELECTED_PATH);
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<"overview" | "up" | "down" | "single">("overview");
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const { fitView } = useReactFlow();
 
-  // Refit once mounted — the initial `fitView` prop can fire before the node
-  // measurements settle, leaving the schematic small with dead space around it.
+  // Initial fit-to-view once rendered
   useEffect(() => {
-    const t = setTimeout(() => fitView({ padding: 0.1, maxZoom: 1.6, duration: 0 }), 120);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => {
+      fitView({ padding: 0.15, maxZoom: 1.25, duration: 400 });
+    }, 150);
+    return () => clearTimeout(timer);
   }, [fitView]);
 
-  const stationsById = useMemo(
-    () => Object.fromEntries(mockStations.map((s) => [s.id, s])) as Record<string, Station>,
+  // Derived sections on the current selected path
+  const pathSections = useMemo(() => getSectionsForPath(selectedPath), [selectedPath]);
+  const pathSectionIdSet = useMemo(() => new Set(pathSections.map((s) => s.id)), [pathSections]);
+  const selectedStationSet = useMemo(() => new Set(selectedPath), [selectedPath]);
+
+  // Deterministic positions for all stations based on the active path
+  const stationPositions = useMemo(
+    () => calculateNetworkLayout(CANONICAL_STATIONS, selectedPath),
+    [selectedPath]
+  );
+
+  // Handle station selection
+  const handleSelectStation = useCallback((stationId: string) => {
+    setSelectedStationId(stationId);
+    // Find first section touching this station to inspect
+    const touchingSection = CANONICAL_SECTIONS.find(
+      (s) => s.fromStationId === stationId || s.toStationId === stationId
+    );
+    if (touchingSection) {
+      setSelectedSectionId(touchingSection.id);
+      setSelectedTrackId(null);
+      setInspectorTab("overview");
+      setInspectorOpen(true);
+    }
+  }, []);
+
+  // Handle full section selection
+  const handleSelectSection = useCallback((sectionId: string) => {
+    setSelectedSectionId(sectionId);
+    setSelectedTrackId(null);
+    setSelectedStationId(null);
+    const sec = CANONICAL_SECTIONS_BY_ID[sectionId];
+    if (sec && sec.lineType === "SINGLE") {
+      setInspectorTab("single");
+    } else {
+      setInspectorTab("overview");
+    }
+    setInspectorOpen(true);
+  }, []);
+
+  // Handle specific track selection (UP / DOWN / BOTH)
+  const handleSelectTrack = useCallback((trackId: string, direction: "UP" | "DOWN" | "BOTH") => {
+    // Find parent section
+    const parentSection = CANONICAL_SECTIONS.find((s) => s.tracks.some((t) => t.id === trackId));
+    if (parentSection) {
+      setSelectedSectionId(parentSection.id);
+      setSelectedTrackId(trackId);
+      setSelectedStationId(null);
+      if (direction === "UP") setInspectorTab("up");
+      else if (direction === "DOWN") setInspectorTab("down");
+      else setInspectorTab("single");
+      setInspectorOpen(true);
+    }
+  }, []);
+
+  // Handle clicking a planned block marker
+  const handleSelectBlock = useCallback(
+    (_blockId: string, sectionId: string, trackId: string) => {
+      setSelectedSectionId(sectionId);
+      setSelectedTrackId(trackId);
+      setSelectedStationId(null);
+      const parentSection = CANONICAL_SECTIONS_BY_ID[sectionId];
+      const track = parentSection?.tracks.find((t) => t.id === trackId);
+      if (track?.direction === "UP") setInspectorTab("up");
+      else if (track?.direction === "DOWN") setInspectorTab("down");
+      else setInspectorTab("single");
+      setInspectorOpen(true);
+    },
     []
   );
 
-  const searchMatches = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return new Set<string>();
-    return new Set(mockSections.filter((s) => matchesQuery(s, stationsById, q)).map((s) => s.id));
-  }, [searchQuery, stationsById]);
-
-  // A search with exactly one hit behaves like a click (opens the panel);
-  // closing the panel sets dismissedId so it doesn't pop open again.
-  const singleSearchMatch = searchMatches.size === 1 ? [...searchMatches][0] : null;
-  const selectedId =
-    clickedId ?? (singleSearchMatch && singleSearchMatch !== dismissedId ? singleSearchMatch : null);
-  const selectedSection = selectedId ? (mockSections.find((s) => s.id === selectedId) ?? null) : null;
-
-  const handleSelect = useCallback((id: string) => setClickedId(id), []);
-
-  const handlePaneClick = useCallback(() => {
-    setClickedId(null);
-    setDismissedId(null);
+  // Close inspector
+  const handleCloseInspector = useCallback(() => {
+    setInspectorOpen(false);
+    setSelectedSectionId(null);
+    setSelectedTrackId(null);
   }, []);
 
-  const closePanel = useCallback(() => {
-    setClickedId(null);
-    if (singleSearchMatch) setDismissedId(singleSearchMatch);
-  }, [singleSearchMatch]);
+  // Search filter
+  const handleSearchChange = (query: string) => {
+    setSearchQuery(query);
+    const q = query.trim().toUpperCase();
+    if (!q) return;
 
-  const onSearchChange = useCallback((value: string) => {
-    setSearchQuery(value);
-    setDismissedId(null);
-  }, []);
-
-  // Station nodes with a live "active block at this junction" indicator
-  const nodes = useMemo<Node<StationNodeData>[]>(() => {
-    const blocksByStation = new Map<string, { count: number; hasBlocked: boolean }>();
-    for (const sec of mockSections) {
-      if (!sec.currentBlock) continue;
-      if (sec.status !== "blocked" && sec.status !== "maintenance") continue;
-      const blocked = sec.status === "blocked";
-      for (const sid of [sec.fromStationId, sec.toStationId]) {
-        const cur = blocksByStation.get(sid) ?? { count: 0, hasBlocked: false };
-        cur.count += 1;
-        cur.hasBlocked = cur.hasBlocked || blocked;
-        blocksByStation.set(sid, cur);
-      }
+    // Direct station match
+    const matchedStation = CANONICAL_STATIONS.find(
+      (s) => s.code.toUpperCase() === q || s.name.toUpperCase().includes(q)
+    );
+    if (matchedStation) {
+      handleSelectStation(matchedStation.id);
+      return;
     }
-    return mockStations.map((station) => {
-      const info = blocksByStation.get(station.id);
+
+    // Direct section match
+    const matchedSection = CANONICAL_SECTIONS.find(
+      (s) =>
+        s.name.toUpperCase().includes(q) ||
+        s.id.toUpperCase().includes(q) ||
+        `${s.fromStationId}-${s.toStationId}`.toUpperCase().includes(q)
+    );
+    if (matchedSection) {
+      handleSelectSection(matchedSection.id);
+    }
+  };
+
+  // Convert stations to ReactFlow nodes
+  const nodes = useMemo<Node[]>(() => {
+    return CANONICAL_STATIONS.map((station) => {
+      const pos = stationPositions[station.id] ?? { x: 100, y: 120 };
+      const isOnPath = selectedStationSet.has(station.id);
+      const isSelected = selectedStationId === station.id;
+
       return {
         id: station.id,
-        type: "station" as const,
-        position: { x: station.x, y: station.y },
+        type: "station",
+        position: { x: pos.x, y: pos.y },
         data: {
           station,
-          activeBlockCount: info?.count ?? 0,
-          hasBlocked: info?.hasBlocked ?? false,
+          isOnSelectedPath: isOnPath,
+          isSelectedStation: isSelected,
+          onSelectStation: handleSelectStation,
         },
         draggable: false,
         selectable: false,
-        connectable: false,
-        deletable: false,
       };
     });
-  }, []);
+  }, [stationPositions, selectedStationSet, selectedStationId, handleSelectStation]);
 
-  // Edges: orientation-aware handles + UP/DOWN lane offsets + dim/highlight.
-  // Horizontal legs use left/right handles, vertical drops (TDL→CNB, DDU→BSB,
-  // CNB→LKO) use bottom/top handles so the serpentine schematic reads as a
-  // proper control-room line diagram instead of wide bezier bulges.
-  const edges = useMemo<Edge<TrackEdgeData>[]>(() => {
-    const pairCounts = new Map<string, number>();
-    for (const s of mockSections) {
-      const key = `${s.fromStationId}→${s.toStationId}`;
-      pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
-    }
-    const pairSeen = new Map<string, number>();
-    const filterStatuses = FILTER_STATUSES[statusFilter];
+  // Convert sections to ReactFlow edges
+  const edges = useMemo<Edge[]>(() => {
+    return CANONICAL_SECTIONS.map((section) => {
+      const fromPos = stationPositions[section.fromStationId] ?? { x: 0, y: 0 };
+      const toPos = stationPositions[section.toStationId] ?? { x: 0, y: 0 };
 
-    return mockSections.map((section) => {
-      const key = `${section.fromStationId}→${section.toStationId}`;
-      const idx = pairSeen.get(key) ?? 0;
-      pairSeen.set(key, idx + 1);
-      const isPair = (pairCounts.get(key) ?? 1) > 1;
-      const laneOffset = isPair ? (idx === 0 ? -LANE_GAP : LANE_GAP) : 0;
+      // Determine handle attachment sides
+      const dx = toPos.x - fromPos.x;
+      const dy = toPos.y - fromPos.y;
 
-      const matchSearch = searchMatches.size > 0 ? searchMatches.has(section.id) : true;
-      const matchFilter = filterStatuses ? filterStatuses.includes(section.status) : true;
-      const dimmed = !matchSearch || !matchFilter;
-      const visualState: TrackEdgeData["visualState"] =
-        section.id === selectedId ? "highlight" : dimmed ? "dimmed" : "normal";
-
-      // Pick handle anchors from the geometry of the two endpoint stations.
-      const from = stationsById[section.fromStationId];
-      const to = stationsById[section.toStationId];
       let sourceHandle = "sR";
       let targetHandle = "tL";
-      if (from && to) {
-        const dx = to.x - from.x;
-        const dy = to.y - from.y;
-        if (Math.abs(dy) >= Math.abs(dx)) {
-          if (dy >= 0) {
-            sourceHandle = "sB";
-            targetHandle = "tT";
-          } else {
-            sourceHandle = "sT";
-            targetHandle = "tB";
-          }
-        } else if (dx < 0) {
-          sourceHandle = "sL";
-          targetHandle = "tR";
+
+      if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical connection (e.g. GZB south to DDU, or ALJN south to LKO)
+        if (dy > 0) {
+          sourceHandle = "sB";
+          targetHandle = "tT";
+        } else {
+          sourceHandle = "sT";
+          targetHandle = "tB";
         }
+      } else if (dx < 0) {
+        // Right to left
+        sourceHandle = "sL";
+        targetHandle = "tR";
       }
+
+      const isOnPath = pathSectionIdSet.has(section.id);
 
       return {
         id: section.id,
@@ -188,45 +219,56 @@ function DiagramInner({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockI
         target: section.toStationId,
         sourceHandle,
         targetHandle,
-        type: "track" as const,
-        zIndex: visualState === "highlight" ? 400 : 0,
-        data: { section, laneOffset, visualState, onSelect: handleSelect },
+        type: "sectionEdge",
+        zIndex: isOnPath ? 20 : 5,
+        data: {
+          section,
+          isOnSelectedPath: isOnPath,
+          selectedTrackId,
+          selectedSectionId,
+          onSelectSection: handleSelectSection,
+          onSelectTrack: handleSelectTrack,
+          onSelectBlock: handleSelectBlock,
+        },
       };
     });
-  }, [searchMatches, statusFilter, selectedId, handleSelect, stationsById]);
+  }, [
+    stationPositions,
+    pathSectionIdSet,
+    selectedTrackId,
+    selectedSectionId,
+    handleSelectSection,
+    handleSelectTrack,
+    handleSelectBlock,
+  ]);
 
-  const summary = useMemo(
-    () => ({
-      total: mockSections.length,
-      clear: mockSections.filter((s) => s.status === "clear").length,
-      occupied: mockSections.filter((s) => s.status === "occupied").length,
-      blocked: mockSections.filter((s) => s.status === "blocked").length,
-      maintenance: mockSections.filter((s) => s.status === "maintenance").length,
-      caution: mockSections.filter((s) => s.status === "caution").length,
-    }),
-    []
-  );
-
-  const activeBlocks = useMemo(
-    () =>
-      mockSections.filter(
-        (s) => s.currentBlock && (s.status === "blocked" || s.status === "maintenance")
-      ),
-    []
-  );
-
-  const matchCount = searchQuery.trim() ? searchMatches.size : null;
+  const activeSection = selectedSectionId
+    ? CANONICAL_SECTIONS_BY_ID[selectedSectionId] ?? null
+    : null;
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden">
-      {/* Toolbar — full width: search · status filters · fit view */}
-      <div className="flex flex-col gap-3 border-b border-[#e3e6f0] bg-white px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="relative w-full min-w-0 max-w-xs">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#f6f7fb]">
+      {/* TOP: Path Builder & Corridor Spine Controls */}
+      <PathControls
+        selectedPath={selectedPath}
+        onPathChange={(newPath) => {
+          setSelectedPath(newPath);
+          setTimeout(() => fitView({ padding: 0.15, maxZoom: 1.25, duration: 300 }), 50);
+        }}
+        onSelectStation={handleSelectStation}
+        onFitView={() => fitView({ padding: 0.15, maxZoom: 1.25, duration: 400 })}
+      />
+
+      {/* MAIN: ReactFlow Canvas (~80%) + Right Slide-in Inspector */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <div className="relative h-full min-h-0 min-w-0 flex-1">
+          {/* Top-left Quick Search Box */}
+          <div className="absolute left-5 top-4 z-20 w-64">
+            <div className="relative">
               <svg
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2"
-                width="14"
-                height="14"
+                width="13"
+                height="13"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="#878da1"
@@ -237,120 +279,73 @@ function DiagramInner({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockI
                 <path d="M20 20l-3.5-3.5" />
               </svg>
               <input
+                type="text"
                 value={searchQuery}
-                onChange={(e) => onSearchChange(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="Search station or section…"
-                className="focus-primary w-full rounded-lg border border-[#e3e6f0] bg-white py-1.5 pl-9 pr-8 text-xs font-medium text-[#171a30] placeholder:text-[#a2a7ba] transition-colors duration-200"
+                className="h-8 w-full rounded-xl border border-[#e3e6f0] bg-white/95 pl-8 pr-7 text-xs font-semibold text-[#171a30] shadow-sm backdrop-blur-sm placeholder:text-[#a2a7ba] focus:border-[#2e3092] focus:outline-none"
               />
               {searchQuery && (
                 <button
-                  onClick={() => onSearchChange("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[#a2a7ba] transition-colors duration-200 hover:text-[#171a30]"
-                  title="Clear search"
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[#878da1] hover:text-[#171a30]"
                 >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.6"
-                    strokeLinecap="round"
-                  >
-                    <path d="M6 6l12 12M18 6L6 18" />
-                  </svg>
+                  ✕
                 </button>
               )}
             </div>
-            {matchCount !== null && (
-              <span className="whitespace-nowrap font-mono text-[10px] font-semibold text-[#878da1]">
-                {matchCount} match{matchCount === 1 ? "" : "es"}
-              </span>
-            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {(Object.keys(FILTER_STATUSES) as StatusFilter[]).map((chip) => {
-              const active = statusFilter === chip;
-              const style = FILTER_CHIP_STYLE[chip];
-              return (
-                <button
-                  key={chip}
-                  onClick={() => setStatusFilter(active ? "All" : chip)}
-                  className={[
-                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors duration-200",
-                    active
-                      ? style.active
-                      : "border-[#e3e6f0] bg-white text-[#4d5468] hover:border-[#c9cde8] hover:text-[#171a30]",
-                  ].join(" ")}
-                >
-                  <span className="h-2 w-2 rounded-full" style={{ background: style.dot }} />
-                  {chip}
-                </button>
-              );
-            })}
-            <span className="mx-1 hidden h-4 w-px bg-[#e3e6f0] sm:block" />
-            <div className="ml-auto hidden items-center md:flex">
-              <StatusLegend />
-            </div>
-            <button
-              onClick={() => fitView({ padding: 0.1, maxZoom: 1.6, duration: 300 })}
-              className="rounded-lg border border-[#e3e6f0] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#4d5468] transition-colors duration-200 hover:bg-[#f5f6fc] hover:text-[#171a30]"
-              title="Reset view"
-            >
-              Fit view
-            </button>
-          </div>
-      </div>
-
-      {/* Map canvas (dominant ~70%) + inspector (narrow fixed column) */}
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="min-h-0 min-w-0 flex-1">
           <ReactFlow
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
-            onPaneClick={handlePaneClick}
-            onEdgeClick={(_, edge) => {
-              const d = edge.data as TrackEdgeData | undefined;
-              if (d?.section?.id) handleSelect(d.section.id);
-            }}
             fitView
-            fitViewOptions={{ padding: 0.1, maxZoom: 1.6 }}
-            minZoom={0.35}
-            maxZoom={1.75}
+            fitViewOptions={{ padding: 0.15, maxZoom: 1.25 }}
+            minZoom={0.4}
+            maxZoom={1.8}
             nodesDraggable={false}
             nodesConnectable={false}
             edgesUpdatable={false}
             deleteKeyCode={null}
+            onPaneClick={() => {
+              // Click background pane to dismiss selection
+              handleCloseInspector();
+            }}
           >
-            <Background color="#dde1ee" gap={22} size={1} />
+            <Background color="#dde1ee" gap={24} size={1} />
             <Controls position="top-right" showInteractive={false} />
           </ReactFlow>
+
+          {/* Bottom Floating Legend */}
+          <div className="absolute bottom-4 left-5 right-5 z-20 pointer-events-auto">
+            <NetworkLegend />
+          </div>
         </div>
 
-        {/* Inspector — ~30% column on desktop, stacked sheet on mobile */}
-        <SectionDetailPanel
-          section={selectedSection}
-          stationsById={stationsById}
-          summary={summary}
-          activeBlocks={activeBlocks}
-          onSelect={handleSelect}
-          onClose={closePanel}
-          onShowPlanningImpact={onShowPlanningImpact}
-        />
+        {/* RIGHT: Slide-in Section / Track Inspector */}
+        {inspectorOpen && activeSection && (
+          <SectionInspector
+            section={activeSection}
+            activeTrackId={selectedTrackId}
+            activeTab={inspectorTab}
+            onTabChange={setInspectorTab}
+            onSelectTrack={handleSelectTrack}
+            onClose={handleCloseInspector}
+            onShowPlanningImpact={onShowPlanningImpact}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function NetworkDiagram({ onShowPlanningImpact }: { onShowPlanningImpact?: (blockId: string) => void }) {
+export default function NetworkDiagram({ onShowPlanningImpact }: NetworkDiagramProps) {
   return (
     <ReactFlowProvider>
       <DiagramInner onShowPlanningImpact={onShowPlanningImpact} />
     </ReactFlowProvider>
   );
 }
-
-export default NetworkDiagram;

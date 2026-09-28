@@ -1,69 +1,106 @@
 // ---------------------------------------------------------------------------
-// COMMAND CENTER — "What needs my attention right now?"
-// 5 KPIs → attention list → tonight's plan strip → data-source footer.
+// COMMAND CENTER — Executive Observe & Decision Screen
+// Structure:
+//   1. Header: Page title, subtitle, subtle corridor metadata, Workspace CTA
+//   2. Section 1: CURRENT PLAN — Hero decision/status card
+//   3. Section 2: ATTENTION REQUIRED — Concise, actionable operational alerts
+//   4. Section 3: UPCOMING PLAN — 3 future planned block cards with deep links
 // ---------------------------------------------------------------------------
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ChevronRight, CircleAlert, Info, Radio } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
-  Button,
-  DecisionCard,
-  MetaText,
-  MetricCard,
-  PageHeader,
-  SectionBlock,
-  StatusBadge,
-  PRIMARY,
-  OK,
-  CRIT,
-  WARN,
-  type ViewId,
-} from "./ui";
-import { AlertDrawer, TrainDrawer, WindowDrawer, type WinRef } from "./drawers";
-import { alerts, blockWindows, DATA_SOURCES, PLAN_DATE, existingBlocks, trains, type Alert, type Train } from "../data/opsData";
-import { recommendedPlan, trainImpactMinutes } from "../data/planData";
-import { planStats, spanMinutes } from "../lib/plan";
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  Briefcase,
+  CheckCircle2,
+  ChevronRight,
+  CircleAlert,
+  Clock,
+  FileText,
+  Info,
+} from "lucide-react";
+import type { ViewId } from "./ui";
+import { AlertDrawer } from "./drawers";
+import { blockWindows, type Alert } from "../data/opsData";
+import { recommendedPlan } from "../data/planData";
+import { planStats } from "../lib/plan";
 import { getPlannerResult } from "../api/planner";
 import type { PlannerResult } from "../api/types";
-import { Timeline, TimelineLegend, buildSummaryLanes, type TimelineBar } from "./Timeline";
-import { buildQualityMetricsFromPlan } from "./PlannerKpiCard";
-import { UtilBar } from "./TimelineUtil";
 
 interface CommandCenterProps {
   onNavigate: (v: ViewId) => void;
   approvalPending: boolean;
   onOpenAssistant: (scenario: "find" | "reserve") => void;
+  onSelectWindow?: (windowId: string) => void;
 }
 
-export function windowRefs(): WinRef[] {
-  const mk = (w: (typeof blockWindows)[number]): WinRef => ({
-    id: w.id,
-    label: w.id,
-    corridorId: w.corridorId,
-    start: w.start,
-    end: w.end,
-    minutes: w.minutes,
-    kind: "proposed",
-    note: w.note,
-  });
-  const mkE = (b: (typeof existingBlocks)[number]): WinRef => ({
-    id: b.id,
-    label: b.blockId,
-    corridorId: b.corridorId,
-    start: b.start,
-    end: b.end,
-    minutes: spanMinutes(b.start, b.end),
-    kind: "existing",
-    blockId: b.blockId,
-    status: b.status,
-    work: b.work,
-  });
-  return [...blockWindows.map(mk), ...existingBlocks.map(mkE)];
+interface UpcomingBlockCard {
+  id: string;
+  date: string;
+  day: string;
+  windowId: string;
+  section: string;
+  track: string;
+  timeRange: string;
+  duration: string;
+  jobsText: string;
+  impactText: string;
+  status: "PENDING APPROVAL" | "AT RISK" | "APPROVED";
+  buttonText: string;
 }
 
-function CommandCenter({ onNavigate, approvalPending, onOpenAssistant }: CommandCenterProps) {
-  const [alert, setAlert] = useState<Alert | null>(null);
-  const [train, setTrain] = useState<Train | null>(null);
-  const [win, setWin] = useState<WinRef | null>(null);
+const UPCOMING_BLOCKS: UpcomingBlockCard[] = [
+  {
+    id: "W1",
+    date: "17 SEP 2026",
+    day: "Thu",
+    windowId: "W1",
+    section: "NDLS – GZB",
+    track: "UP TRACK",
+    timeRange: "01:00 – 04:00",
+    duration: "3 h",
+    jobsText: "3 jobs",
+    impactText: "25 min expected impact",
+    status: "PENDING APPROVAL",
+    buttonText: "Review in Planning Workspace",
+  },
+  {
+    id: "W2",
+    date: "18 SEP 2026",
+    day: "Fri",
+    windowId: "W2",
+    section: "TDL – CNB",
+    track: "DOWN TRACK",
+    timeRange: "01:30 – 05:30",
+    duration: "4 h",
+    jobsText: "2 jobs · 1 critical",
+    impactText: "18 min expected impact",
+    status: "AT RISK",
+    buttonText: "View details",
+  },
+  {
+    id: "W3",
+    date: "19 SEP 2026",
+    day: "Sat",
+    windowId: "W3",
+    section: "PRYJ – DDU",
+    track: "UP TRACK",
+    timeRange: "02:00 – 05:00",
+    duration: "3 h",
+    jobsText: "4 jobs",
+    impactText: "8 min expected impact",
+    status: "APPROVED",
+    buttonText: "View details",
+  },
+];
+
+export default function CommandCenter({
+  onNavigate,
+  approvalPending,
+  onOpenAssistant,
+  onSelectWindow,
+}: CommandCenterProps) {
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [showAllActions, setShowAllActions] = useState(false);
   const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
 
@@ -77,248 +114,340 @@ function CommandCenter({ onNavigate, approvalPending, onOpenAssistant }: Command
     };
   }, []);
 
-  // Metrics follow the LIVE plan when the backend has one (PART 6 — one owner
-  // for interval arithmetic); planStats is the offline/seed fallback renderer.
   const seedStats = planStats(
     blockWindows.map((w) => ({ id: w.id, minutes: w.minutes })),
     recommendedPlan.assignments
   );
   const liveMetrics = plannerResult?.source.status === "live" ? plannerResult.metrics : null;
-  const stats =
-    liveMetrics && (liveMetrics.utilization !== undefined || liveMetrics.blocks !== undefined)
-      ? {
-          blocks: liveMetrics.blocks ?? seedStats.blocks,
-          jobs: liveMetrics.scheduled ?? seedStats.jobs,
-          utilization: liveMetrics.utilization ?? 0,
-          windowMinutes: liveMetrics.windowMinutes ?? seedStats.windowMinutes,
-          occupiedMinutes: liveMetrics.occupiedMinutes ?? seedStats.occupiedMinutes,
-          unusedMinutes: liveMetrics.unusedMinutes ?? seedStats.unusedMinutes,
-        }
-      : seedStats;
-  // Same derivation the Approval screen shows — one definition per metric (§metric consistency).
-  const criticalOverdue = Number(buildQualityMetricsFromPlan(plannerResult).criticalBacklog) || 0;
-  const pending = existingBlocks.filter((b) => b.status === "pending").length;
-  const deferredCount =
-    plannerResult?.source.status === "live"
-      ? plannerResult.deferred.length
-      : recommendedPlan.deferred.length;
-  const isLive = plannerResult?.source.status === "live";
-  // "Tonight's plan" timeline mirrors the actual planner output (seed fallback offline).
-  const summaryLanes = useMemo(
-    () => buildSummaryLanes(plannerResult?.assignments ?? []),
-    [plannerResult]
-  );
+  const stats = {
+    blocks: liveMetrics?.blocks ?? seedStats.blocks,
+    jobs: liveMetrics?.scheduled ?? seedStats.jobs,
+  };
 
-  const attention: {
-    icon: React.ReactNode;
-    tone: string;
-    title: string;
-    meta: string;
-    open: () => void;
-  }[] = [
+  const handleOpenWindow = (winId: string) => {
+    if (onSelectWindow) {
+      onSelectWindow(winId);
+    } else {
+      onNavigate("workspace");
+    }
+  };
+
+  // Structured attention items matching the operational priorities
+  const attentionItems = [
     {
-      icon: <CircleAlert size={15} />,
-      tone: CRIT,
-      title: alerts[0].title,
-      meta: `${alerts[0].time} IST · ${alerts[0].section}`,
-      open: () => setAlert(alerts[0]),
+      id: "ATTN-1",
+      icon: <CircleAlert size={18} className="text-[#dc2626]" />,
+      iconBg: "bg-[#fef2f2]",
+      title: "Critical maintenance request",
+      subtitle: "Tier 0 — OHE insulator failure at DDU–BSB",
+      topMeta: "Reported 20:41 IST",
+      bottomMeta: "DDU–BSB · KM 74/12",
+      onClick: () => handleOpenWindow("W3"),
     },
     {
-      icon: <AlertTriangle size={15} />,
-      tone: WARN,
-      title: alerts[1].title,
-      meta: `${alerts[1].time} IST · act before 03:00`,
-      open: () => setAlert(alerts[1]),
+      id: "ATTN-2",
+      icon: <AlertTriangle size={18} className="text-[#d97706]" />,
+      iconBg: "bg-[#fffbeb]",
+      title: "Block approval deadline",
+      subtitle: "W1 · NDLS–GZB · approval closes in 6 h",
+      topMeta: "Closes 21:05 IST",
+      bottomMeta: "17 Sep 2026 · 01:00–04:00",
+      onClick: () => onNavigate("approval"),
     },
     {
-      icon: <Info size={15} />,
-      tone: PRIMARY,
-      title: "Relief train path requested — NDLS–GZB 02:30–03:30",
-      meta: "Draft event from the control desk — reserve & replan",
-      open: () => onOpenAssistant("reserve"),
-    },
-    {
-      icon: <AlertTriangle size={15} />,
-      tone: WARN,
-      title: alerts[2].title,
-      meta: `${alerts[2].time} IST · ${alerts[2].section}`,
-      open: () => setAlert(alerts[2]),
+      id: "ATTN-3",
+      icon: <Info size={18} className="text-[#2563eb]" />,
+      iconBg: "bg-[#eff6ff]",
+      title: "Planning change request",
+      subtitle: "Relief train path requested — NDLS–GZB",
+      topMeta: "Requested 02:30–03:30",
+      bottomMeta: "Insert event in plan",
+      onClick: () => onOpenAssistant("reserve"),
     },
   ];
 
-  const pick = (b: TimelineBar) => {
-    if (b.trainId) {
-      const t = trains.find((x) => x.id === b.trainId);
-      if (t) setTrain(t);
-      return;
+  const displayedAttention = showAllActions ? attentionItems : attentionItems.slice(0, 3);
+
+  const getStatusBadgeStyle = (status: UpcomingBlockCard["status"]) => {
+    switch (status) {
+      case "PENDING APPROVAL":
+        return "bg-[#fffbeb] text-[#b45309] border-[#fde68a]";
+      case "AT RISK":
+        return "bg-[#fef2f2] text-[#991b1b] border-[#fecaca]";
+      case "APPROVED":
+        return "bg-[#f0fdf4] text-[#166534] border-[#bbf7d0]";
     }
-    if (b.winId) setWin(windowRefs().find((w) => w.id === b.winId) ?? null);
   };
 
   return (
-    <div>
-      <PageHeader
-        title="Command Center"
-        subtitle={PLAN_DATE}
-        meta={
-          <>
-            <MetaText>NDLS–BSB TRUNK</MetaText>
-            <MetaText>DEMO DATA · SYNTHETIC FEEDS</MetaText>
-          </>
-        }
-        right={
-          <Button variant="secondary" onClick={() => onNavigate("workspace")}>
-            Open Planning Workspace
-          </Button>
-        }
-      />
+    <div className="mx-auto max-w-[1340px] space-y-7 pb-10">
+      {/* PAGE HEADER */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight text-[#171a30]">
+            Command Center
+          </h1>
+          <p className="mt-0.5 text-xs text-[#626982]">
+            Upcoming maintenance planning and key actions
+          </p>
+          <div className="mt-1 flex items-center gap-2 text-[10px] font-bold tracking-wider text-[#878da1]">
+            <span>NDLS – BSB</span>
+            <span>·</span>
+            <span>DEMO DATA</span>
+            <span>·</span>
+            <span>SYNTHETIC FEEDS</span>
+          </div>
+        </div>
 
-      {/* L1 — status & attention answer "what needs me?" in one glance */}
-      <div className="mb-6 grid gap-4 lg:grid-cols-2">
-        <DecisionCard
-          title="Plan status"
-          badge={
-            <StatusBadge
-              label={approvalPending ? "Pending approval" : "Decision recorded"}
-              tone={approvalPending ? WARN : OK}
-              pulse={approvalPending}
-            />
-          }
+        <button
+          type="button"
+          onClick={() => onNavigate("workspace")}
+          className="flex items-center gap-1.5 rounded-xl border border-[#2e3092]/30 bg-white px-4 py-2 text-xs font-bold text-[#2e3092] shadow-xs transition-colors hover:bg-[#2e3092]/5 hover:border-[#2e3092]"
         >
-          <div className="flex h-full flex-col gap-3">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="min-w-0">
-                <div className="value-lg text-[#171a30]">
-                  Plan r3 · {stats.jobs} jobs · {stats.blocks} blocks
-                </div>
-                <div className="mt-1 text-xs text-[#4d5468]">
-                  {stats.windowMinutes} min window capacity · 22:00–08:00
-                  {pending > 0 ? ` · ${pending} pending request${pending > 1 ? "s" : ""}` : ""}
-                </div>
-              </div>
-              <div className="text-right">
-                <div
-                  className="font-mono text-[22px] font-bold leading-none"
-                  style={{ color: stats.utilization >= 85 ? OK : PRIMARY }}
-                >
-                  {stats.utilization}%
-                </div>
-                <div className="mt-1 text-[10px] font-bold uppercase tracking-wider text-[#878da1]">
-                  utilization
-                </div>
-              </div>
+          <span>Open Planning Workspace</span>
+          <ArrowRight size={14} />
+        </button>
+      </div>
+
+      {/* SECTION 1: CURRENT PLAN HERO CARD */}
+      <section className="rounded-2xl border border-[#e3e6f0] bg-white p-6 shadow-xs">
+        <div className="grid gap-6 lg:grid-cols-12 lg:items-center">
+          {/* Left Column: Decision Status & Scope */}
+          <div className="lg:col-span-5">
+            <div className="flex items-center gap-2.5">
+              <span className="font-mono text-[10px] font-extrabold uppercase tracking-wider text-[#878da1]">
+                CURRENT PLAN
+              </span>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider"
+                style={{
+                  color: approvalPending ? "#b45309" : "#166534",
+                  background: approvalPending ? "#fffbeb" : "#f0fdf4",
+                  border: `1px solid ${approvalPending ? "#fde68a" : "#bbf7d0"}`,
+                }}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${approvalPending ? "animate-pulse" : ""}`}
+                  style={{ background: approvalPending ? "#d97706" : "#16a34a" }}
+                />
+                {approvalPending ? "PENDING APPROVAL" : "APPROVED"}
+              </span>
             </div>
-            <div className="space-y-3">
-              <UtilBar pct={stats.utilization} tone={stats.utilization >= 85 ? OK : PRIMARY} />
+
+            <div className="mt-2 text-3xl font-black tracking-tight text-[#171a30]">
+              Plan r3
+            </div>
+            <div className="mt-1 text-xs font-medium text-[#626982]">
+              17 Sep 2026 · Night maintenance plan
+            </div>
+
+            <div className="mt-5 flex items-center gap-8">
               <div>
-                {approvalPending ? (
-                  <Button onClick={() => onNavigate("approval")}>Review plan →</Button>
-                ) : (
-                  <Button variant="secondary" onClick={() => onNavigate("workspace")}>
-                    Open workspace →
-                  </Button>
-                )}
+                <div className="font-mono text-2xl font-black text-[#171a30]">{stats.jobs}</div>
+                <div className="text-[11px] font-semibold text-[#878da1]">Jobs</div>
+              </div>
+              <div className="h-8 w-px bg-[#eef0f6]" />
+              <div>
+                <div className="font-mono text-2xl font-black text-[#171a30]">{stats.blocks}</div>
+                <div className="text-[11px] font-semibold text-[#878da1]">Blocks</div>
               </div>
             </div>
           </div>
-        </DecisionCard>
 
-        <DecisionCard
-          title="Action required"
-          accent={CRIT}
-          badge={<StatusBadge label={`${attention.length} items`} tone={CRIT} />}
-        >
-          <div className="-mx-4 -my-1 divide-y divide-[#eef0f6]">
-            {(showAllActions ? attention : attention.slice(0, 3)).map((a, i) => (
-              <button
-                key={i}
-                onClick={a.open}
-                className="focus-primary flex w-full items-center gap-3 px-4 py-2 text-left transition-colors duration-200 hover:bg-[#f5f6fc]"
-              >
-                <span style={{ color: a.tone }}>{a.icon}</span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-xs font-semibold text-[#171a30]">{a.title}</span>
-                  <span className="block truncate text-[11px] text-[#878da1]">{a.meta}</span>
-                </span>
-                <ChevronRight size={14} className="shrink-0 text-[#a2a7ba]" />
-              </button>
-            ))}
-            {!showAllActions && attention.length > 3 && (
-              <button
-                type="button"
-                onClick={() => setShowAllActions(true)}
-                className="focus-primary w-full px-4 py-2 text-left text-[11px] font-bold text-[#2e3092] transition-colors duration-200 hover:bg-[#f5f6fc]"
-              >
-                View all {attention.length} →
-              </button>
-            )}
+          {/* Right Column: Guidance & Main Navigation Action */}
+          <div className="flex flex-col items-start gap-4 rounded-xl border border-[#f1f3f9] bg-[#fafbfe] p-5 sm:flex-row sm:items-center lg:col-span-7">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#fde68a] bg-[#fffbeb] text-[#d97706]">
+              <FileText size={22} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-bold text-[#171a30]">
+                {approvalPending ? "This plan is pending approval." : "This plan is approved."}
+              </h3>
+              <p className="mt-0.5 text-xs text-[#626982]">
+                Review the planned blocks, jobs and impacts in the Planning Workspace.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleOpenWindow("W1")}
+              className="flex items-center gap-2 whitespace-nowrap rounded-xl bg-[#2e3092] px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-[#232573] active:scale-[0.99]"
+            >
+              <span>Review Plan in Planning Workspace</span>
+              <ArrowRight size={14} />
+            </button>
           </div>
-        </DecisionCard>
-      </div>
+        </div>
+      </section>
 
-      {/* L2 — tonight's plan */}
-      <SectionBlock
-        className="mb-6"
-        title="Tonight's plan"
-        description="22:00 → 08:00 · click any bar for details"
-        right={
+      {/* SECTION 2: ATTENTION REQUIRED */}
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-black uppercase tracking-wider text-[#171a30]">
+              ATTENTION REQUIRED
+            </h2>
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#dc2626] px-1.5 text-[10px] font-bold text-white">
+              {attentionItems.length}
+            </span>
+          </div>
           <button
-            onClick={() => onNavigate("workspace")}
-            className="focus-primary text-[11px] font-bold text-[#2e3092] hover:text-[#24266f]"
+            type="button"
+            onClick={() => setShowAllActions((v) => !v)}
+            className="flex items-center gap-1 text-xs font-bold text-[#2e3092] transition-colors hover:underline"
           >
-            Full workspace →
+            <span>{showAllActions ? "Show top 3" : "View all"}</span>
+            <ArrowRight size={12} />
           </button>
-        }
-      >
-        <TimelineLegend />
-        <Timeline lanes={summaryLanes} onPick={pick} />
-      </SectionBlock>
+        </div>
 
-      {/* Core metrics — critical/overdue visibly dominant */}
-      <h3 className="section-title mb-3 text-[#878da1]">Core metrics</h3>
-      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <MetricCard
-          level="primary"
-          tone={CRIT}
-          label="Critical / overdue"
-          value={criticalOverdue}
-          context="Tier 0–2 work awaiting a window"
-        />
-        <MetricCard label="Jobs scheduled" value={stats.jobs} context={`across ${stats.blocks} blocks`} tone={OK} />
-        <MetricCard label="Jobs deferred" value={deferredCount} context="held for future windows" tone={WARN} />
-        <MetricCard
-          label="Train impact"
-          value={isLive ? `${(plannerResult?.trainImpact ?? []).length} paths` : `${trainImpactMinutes} min`}
-          context={isLive ? "protected movements held" : "freight regulation tonight"}
-          tone={WARN}
-        />
-        <MetricCard
-          label="Block utilization"
-          value={`${stats.utilization}%`}
-          context="occupied ÷ window minutes"
-          tone={PRIMARY}
-        />
-      </div>
+        {attentionItems.length > 0 ? (
+          <div className="overflow-hidden rounded-2xl border border-[#e3e6f0] bg-white divide-y divide-[#eef0f6] shadow-xs">
+            {displayedAttention.map((item) => (
+              <div
+                key={item.id}
+                onClick={item.onClick}
+                className="group flex cursor-pointer items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[#f8f9fd]"
+              >
+                {/* Semantic Icon */}
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${item.iconBg}`}
+                >
+                  {item.icon}
+                </div>
 
-      {/* L3 — data provenance, deliberately quiet */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-[#e3e6f0] bg-white px-4 py-2.5">
-        <span className="flex items-center gap-1.5">
-          <Radio size={11} className="text-[#16a34a]" />
-          <MetaText>DEMO DATA · SYNTHETIC SOURCES</MetaText>
-        </span>
-        {DATA_SOURCES.map((s) => (
-          <span key={s.id} title={s.label}>
-            <MetaText>{s.id}</MetaText>
-          </span>
-        ))}
-        <MetaText className="ml-auto">No live railway connection — simulated feeds</MetaText>
-      </div>
+                {/* Left Description */}
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-[#171a30] group-hover:text-[#2e3092] transition-colors">
+                    {item.title}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[#626982]">
+                    {item.subtitle}
+                  </div>
+                </div>
 
-      {alert && <AlertDrawer alert={alert} onClose={() => setAlert(null)} />}
-      {train && <TrainDrawer trainId={train.id} onClose={() => setTrain(null)} />}
-      {win && <WindowDrawer win={win} onClose={() => setWin(null)} />}
+                {/* Right Metadata */}
+                <div className="text-right">
+                  <div className="text-xs font-semibold text-[#171a30]">
+                    {item.topMeta}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-[#878da1]">
+                    {item.bottomMeta}
+                  </div>
+                </div>
+
+                {/* Navigation Chevron */}
+                <ChevronRight
+                  size={16}
+                  className="shrink-0 text-[#a2a7ba] transition-transform group-hover:translate-x-0.5 group-hover:text-[#2e3092]"
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Empty state */
+          <div className="flex items-center gap-3 rounded-2xl border border-[#e3e6f0] bg-white p-5 text-[#16a34a] shadow-xs">
+            <CheckCircle2 size={20} />
+            <div>
+              <div className="text-xs font-extrabold uppercase tracking-wider text-[#16a34a]">
+                No Action Required
+              </div>
+              <div className="text-xs text-[#626982]">
+                No unresolved approval or planning issues.
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* SECTION 3: UPCOMING PLAN */}
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-xs font-black uppercase tracking-wider text-[#171a30]">
+            UPCOMING PLAN
+          </h2>
+          <button
+            type="button"
+            onClick={() => onNavigate("workspace")}
+            className="flex items-center gap-1 text-xs font-bold text-[#2e3092] transition-colors hover:underline"
+          >
+            <span>View calendar</span>
+            <ArrowRight size={12} />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {UPCOMING_BLOCKS.map((card) => (
+            <div
+              key={card.id}
+              className="flex flex-col justify-between rounded-2xl border border-[#e3e6f0] bg-white p-5 shadow-xs transition-shadow hover:shadow-sm"
+            >
+              <div>
+                {/* Header: Date and Status Badge */}
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="font-mono text-xs font-bold uppercase text-[#171a30]">
+                      {card.date}
+                    </div>
+                    <div className="text-[10px] text-[#878da1]">{card.day}</div>
+                  </div>
+                  <span
+                    className={`rounded-md border px-2 py-0.5 font-mono text-[9px] font-extrabold uppercase tracking-wider ${getStatusBadgeStyle(
+                      card.status
+                    )}`}
+                  >
+                    {card.status}
+                  </span>
+                </div>
+
+                {/* Block ID & Section */}
+                <div className="mt-4">
+                  <div className="font-mono text-2xl font-black text-[#171a30]">
+                    {card.windowId}
+                  </div>
+                  <div className="mt-0.5 text-xs font-bold text-[#4d5468]">
+                    {card.section} · <span className="font-mono text-[#878da1]">{card.track}</span>
+                  </div>
+                </div>
+
+                {/* Attributes: Time, Jobs, Delay Impact */}
+                <div className="mt-4 space-y-2 text-xs text-[#626982]">
+                  <div className="flex items-center gap-2">
+                    <Clock size={13} className="text-[#878da1]" />
+                    <span className="font-mono font-medium text-[#171a30]">
+                      {card.timeRange} ({card.duration})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Briefcase size={13} className="text-[#878da1]" />
+                    <span>{card.jobsText}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <BarChart3 size={13} className="text-[#878da1]" />
+                    <span>{card.impactText}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Button */}
+              <div className="mt-5 pt-3">
+                <button
+                  type="button"
+                  onClick={() => handleOpenWindow(card.windowId)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#e3e6f0] bg-[#fafbfe] py-2 text-xs font-bold text-[#2e3092] transition-colors hover:border-[#2e3092]/50 hover:bg-[#2e3092]/5 active:scale-[0.99]"
+                >
+                  <span>{card.buttonText}</span>
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Progressive Alert Drawer if needed */}
+      {selectedAlert && (
+        <AlertDrawer alert={selectedAlert} onClose={() => setSelectedAlert(null)} />
+      )}
     </div>
   );
 }
-
-export default CommandCenter;
