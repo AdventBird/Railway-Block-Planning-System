@@ -44,9 +44,8 @@ export function BlockInspector({
   const departments = [...new Set(jobs.map((j) => j.dept))];
 
   return (
-    <div className="flex h-full flex-col justify-between rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
-      <div>
-        {/* Header */}
+    <div className="flex flex-col rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
+      {/* Header */}
         <div className="border-b border-[#eef0f6] pb-3">
           <div className="flex items-start justify-between gap-2">
             <div>
@@ -294,10 +293,9 @@ export function BlockInspector({
             </div>
           )}
         </div>
-      </div>
 
       {/* Action Buttons */}
-      <div className="mt-3 border-t border-[#eef0f6] pt-3">
+      <div className="mt-4 border-t border-[#eef0f6] pt-3">
         <div className="grid grid-cols-2 gap-2 mb-2">
           <Button variant="secondary" onClick={() => onModify(block.id)}>
             Modify Block

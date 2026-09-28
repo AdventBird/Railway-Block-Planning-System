@@ -9,7 +9,7 @@ export function OpenCapacity({ onSelectBlock }: OpenCapacityProps) {
   const totalFree = ACTIONABLE_OPEN_CAPACITY.reduce((sum, item) => sum + item.freeMinutes, 0);
 
   return (
-    <div className="flex h-full flex-col justify-between rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
+    <div className="flex flex-col rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
       <div>
         <div className="flex items-center justify-between border-b border-[#eef0f6] pb-2.5">
           <div className="flex items-baseline gap-2">
@@ -75,7 +75,7 @@ export function OpenCapacity({ onSelectBlock }: OpenCapacityProps) {
         </div>
       </div>
 
-      <div className="mt-2 text-[10px] text-[#878da1] text-right font-mono">
+      <div className="mt-3 border-t border-[#eef0f6] pt-2 text-[10px] text-[#878da1] text-right font-mono">
         All candidates validated against electrical & track isolation
       </div>
     </div>

@@ -52,7 +52,7 @@ export function JobPlanningList({
   }, [jobs, filterTab, searchQuery]);
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-[#e3e6f0] bg-white shadow-xs">
+    <div className="flex flex-col rounded-xl border border-[#e3e6f0] bg-white shadow-xs">
       {/* Header and Search */}
       <div className="border-b border-[#eef0f6] p-3">
         <div className="flex items-center justify-between">

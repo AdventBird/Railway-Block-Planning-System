@@ -195,7 +195,7 @@ export const sectionOps: Record<string, SectionOps> = {
   "SEC-CNB-FTP-UP": { nextWindow: "—", trainImpact: 1, history: "No blocks this week" },
   "SEC-CNB-FTP-DN": { nextWindow: "—", trainImpact: 0, history: "No blocks this week" },
   "SEC-FTP-PRYJ": { nextWindow: "—", trainImpact: 0, history: "No blocks this week" },
-  "SEC-PRYJ-DDU-UP": { nextWindow: "W3 · 01:30–06:15 (proposed)", trainImpact: 2, trainNote: "CONCOR-2210 passes 03:20–04:40", compat: "CG-2 — conditional: power certification between jobs", resources: "TW-925 + OHE crews A/B", history: "Axle-counter resets rising (J-07)" },
+  "SEC-PRYJ-DDU-UP": { nextWindow: "W3 · 02:00–06:15 (proposed)", trainImpact: 2, trainNote: "CONCOR-2210 passes 03:20–04:40", compat: "CG-2 — conditional: power certification between jobs", resources: "TW-925 + OHE crews A/B", history: "Axle-counter resets rising (J-07)" },
   "SEC-PRYJ-DDU-DN": { nextWindow: "—", trainImpact: 1, history: "No blocks this week" },
   "SEC-DDU-BSB": { nextWindow: "After 05:30 (block ends)", trainImpact: 2, trainNote: "Through traffic held until OHE restored", compat: "Tier 0 J-01 rides inside BLK-2026-0423", resources: "Tower wagon TW-925 + OHE crew A", history: "OHE renewed 2018; insulator failure 14 Sep" },
   "SEC-CNB-LKO": { nextWindow: "—", trainImpact: 0, history: "No blocks this week" },

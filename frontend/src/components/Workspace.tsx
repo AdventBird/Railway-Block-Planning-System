@@ -389,9 +389,9 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
 
       {/* 2. Top Area: Month Calendar + Plan Summary + Jobs List */}
       {horizon === "month" && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 items-start">
           {/* Left: September 2026 Month Calendar (4 cols) */}
-          <div className="lg:col-span-4 min-h-[360px]">
+          <div className="lg:col-span-4">
             <PlanningCalendar
               selectedDate={selectedDate}
               onSelectDate={(d) => setSelectedDate(d)}
@@ -400,7 +400,7 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           </div>
 
           {/* Center: Plan Summary Strip (4 cols) */}
-          <div className="lg:col-span-4 min-h-[360px]">
+          <div className="lg:col-span-4">
             <PlanSummary
               totalJobs={38}
               scheduledCount={28}
@@ -420,7 +420,7 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
           </div>
 
           {/* Right: Jobs Catalogue Panel (4 cols) */}
-          <div className="lg:col-span-4 min-h-[360px]">
+          <div className="lg:col-span-4">
             <JobPlanningList
               jobs={effectiveHorizonJobs}
               selectedJobId={selectedJobId}
@@ -466,7 +466,7 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
         </div>
 
         {/* Selected Block Inspector (32% width -> lg:col-span-4) */}
-        <div className="lg:col-span-4">
+        <div className="lg:col-span-4 self-start sticky top-4">
           <BlockInspector
             block={selectedBlock}
             jobs={selectedBlockJobs}
@@ -482,7 +482,7 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
       </div>
 
       {/* 4. Bottom Area: Actionable Deferred Work & Open Capacity */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 items-start">
         {/* Left: Actionable Deferred Work with Alternatives (7 cols) */}
         <div className="lg:col-span-7">
           <ActionableDeferred

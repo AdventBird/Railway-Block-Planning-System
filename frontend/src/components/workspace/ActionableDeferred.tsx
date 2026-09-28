@@ -66,7 +66,7 @@ export function ActionableDeferred({
   });
 
   return (
-    <div className="flex h-full flex-col justify-between rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
+    <div className="flex flex-col rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
       <div>
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#eef0f6] pb-2.5">
@@ -116,7 +116,12 @@ export function ActionableDeferred({
 
         {/* Deferred Job Items */}
         <div className="thin-scroll mt-2 space-y-2 max-h-[340px] overflow-y-auto pr-1">
-          {filteredJobs.map((j) => {
+          {filteredJobs.length === 0 ? (
+            <div className="py-6 text-center text-xs text-[#878da1]">
+              No deferred jobs match the selected filter.
+            </div>
+          ) : (
+            filteredJobs.map((j) => {
             const isExpanded = expandedJobId === j.id;
             const alternatives = ALTERNATIVE_WINDOWS_MAP[j.id] ?? [];
             const isAtRisk = j.status === "at_risk";
@@ -259,7 +264,7 @@ export function ActionableDeferred({
                 )}
               </div>
             );
-          })}
+          }))}
         </div>
       </div>
 

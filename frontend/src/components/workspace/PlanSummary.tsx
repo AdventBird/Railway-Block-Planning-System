@@ -31,7 +31,7 @@ export function PlanSummary({
   const riskPct = Math.round((atRiskCount / totalJobs) * 100);
 
   return (
-    <div className="flex h-full flex-col justify-between rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
+    <div className="flex flex-col rounded-xl border border-[#e3e6f0] bg-white p-4 shadow-xs">
       <div>
         {/* Title */}
         <div className="mb-3 flex items-baseline justify-between">

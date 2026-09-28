@@ -335,7 +335,7 @@ export function DailyTimeline({
                                 }}
                                 onClick={() => onSelectTrain && onSelectTrain(tr.id)}
                                 title={`${tr.number} ${tr.name} (${tr.start}–${tr.end}) · ${tr.note ?? ""}`}
-                                className={`absolute z-10 cursor-pointer rounded px-1.5 py-0.5 text-[9px] font-bold transition-all ${
+                                className={`absolute z-30 cursor-pointer rounded px-1.5 py-0.5 text-[9px] font-bold transition-all ${
                                   // When block is on the same track, position train above to avoid overlap
                                   trackBlocks.length > 0 ? "top-1 h-5" : "top-3.5 h-6"
                                 } ${
