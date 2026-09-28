@@ -12,8 +12,13 @@ export interface Corridor {
 export interface BlockWindow {
   id: string;
   corridorId: string;
+  sectionId: string;
+  trackId: string;
+  direction: "UP" | "DOWN" | "BOTH";
   start: string; // "HH:MM"
   end: string;
+  possessionStart?: string;
+  possessionEnd?: string;
   minutes: number;
   note: string;
 }
@@ -24,6 +29,9 @@ export interface Train {
   name: string;
   type: "passenger" | "freight" | "special";
   corridorId: string;
+  sectionId?: string;
+  trackId?: string;
+  direction?: "UP" | "DOWN" | "BOTH";
   start: string;
   end: string;
   note?: string;
@@ -33,8 +41,13 @@ export interface ExistingBlock {
   id: string;
   blockId: string;
   corridorId: string;
+  sectionId: string;
+  trackId: string;
+  direction: "UP" | "DOWN" | "BOTH";
   start: string;
   end: string;
+  possessionStart?: string;
+  possessionEnd?: string;
   status: "approved" | "pending";
   work: string;
 }
@@ -52,8 +65,9 @@ export interface Alert {
 }
 
 export const PLAN_DATE = "Night of Mon 14 → Tue 15 Sep 2026";
-export const PLAN_VERSION = "v2026.09.15 · r3";
-export const PLAN_VERSION_NEXT = "v2026.09.15 · r4";
+export const PLAN_VERSION = "Current Plan";
+export const PLAN_VERSION_INTERNAL = "v2026.09.15 · r3";
+export const PLAN_VERSION_NEXT = "Plan Revision (Draft)";
 
 export const corridors: Corridor[] = [
   { id: "C1", label: "NDLS–GZB (UP)", line: "UP" },
@@ -71,24 +85,39 @@ export const blockWindows: BlockWindow[] = [
   {
     id: "W1",
     corridorId: "C1",
+    sectionId: "SEC-NDLS-GZB",
+    trackId: "TRK-NDLS-GZB-UP",
+    direction: "UP",
     start: "01:00",
     end: "04:00",
+    possessionStart: "01:00",
+    possessionEnd: "04:00",
     minutes: 180,
     note: "Traffic gap between Down Rajdhani paths and early freight",
   },
   {
     id: "W2",
     corridorId: "C2",
+    sectionId: "SEC-TDL-CNB",
+    trackId: "TRK-TDL-CNB-DN",
+    direction: "DOWN",
     start: "01:30",
     end: "05:30",
+    possessionStart: "01:30",
+    possessionEnd: "05:30",
     minutes: 240,
     note: "NCR sanctioned night corridor after BCNA goods clear",
   },
   {
     id: "W3",
     corridorId: "C3",
+    sectionId: "SEC-PRYJ-DDU",
+    trackId: "TRK-PRYJ-DDU-UP",
+    direction: "UP",
     start: "01:30",
     end: "06:15",
+    possessionStart: "01:30",
+    possessionEnd: "06:15",
     minutes: 285,
     note: "Lean freight window before MGS junction release",
   },
@@ -96,20 +125,20 @@ export const blockWindows: BlockWindow[] = [
 
 /** Trains inside the 22:00–08:00 planning horizon. */
 export const trains: Train[] = [
-  { id: "T1", number: "12951", name: "Mumbai Rajdhani", type: "passenger", corridorId: "C1", start: "22:50", end: "23:50", note: "Premier passenger — protect path" },
-  { id: "T2", number: "12313", name: "Sealdah Rajdhani", type: "passenger", corridorId: "C1", start: "23:55", end: "00:55", note: "Premier passenger — protect path" },
-  { id: "T3", number: "BCNA-47012", name: "BOXN goods", type: "freight", corridorId: "C2", start: "00:40", end: "02:10" },
-  { id: "T4", number: "CONCOR-2210", name: "Double-stack container", type: "freight", corridorId: "C3", start: "03:20", end: "04:40" },
-  { id: "T5", number: "FT-882", name: "Port clearance freight", type: "freight", corridorId: "C1", start: "05:15", end: "06:00" },
-  { id: "T6", number: "02612", name: "VIP Special (SECURE)", type: "special", corridorId: "C4", start: "02:30", end: "05:00", note: "Runs on UP; DOWN under sanctioned block BLK-2026-0412" },
-  { id: "T7", number: "FT-903", name: "Rake placement CNB yard", type: "freight", corridorId: "C2", start: "05:45", end: "06:30" },
+  { id: "T1", number: "12951", name: "Mumbai Rajdhani", type: "passenger", corridorId: "C1", sectionId: "SEC-NDLS-GZB", trackId: "TRK-NDLS-GZB-UP", direction: "UP", start: "22:50", end: "23:50", note: "Premier passenger — protect path" },
+  { id: "T2", number: "12313", name: "Sealdah Rajdhani", type: "passenger", corridorId: "C1", sectionId: "SEC-NDLS-GZB", trackId: "TRK-NDLS-GZB-UP", direction: "UP", start: "23:55", end: "00:55", note: "Premier passenger — protect path" },
+  { id: "T3", number: "BCNA-47012", name: "BOXN goods", type: "freight", corridorId: "C2", sectionId: "SEC-TDL-CNB", trackId: "TRK-TDL-CNB-DN", direction: "DOWN", start: "00:40", end: "02:10" },
+  { id: "T4", number: "CONCOR-2210", name: "Double-stack container", type: "freight", corridorId: "C3", sectionId: "SEC-PRYJ-DDU", trackId: "TRK-PRYJ-DDU-UP", direction: "UP", start: "03:20", end: "04:40" },
+  { id: "T5", number: "FT-882", name: "Port clearance freight", type: "freight", corridorId: "C1", sectionId: "SEC-NDLS-GZB", trackId: "TRK-NDLS-GZB-UP", direction: "UP", start: "05:15", end: "06:00" },
+  { id: "T6", number: "02612", name: "VIP Special (SECURE)", type: "special", corridorId: "C4", sectionId: "SEC-GZB-ALJN", trackId: "TRK-GZB-ALJN-UP", direction: "UP", start: "02:30", end: "05:00", note: "Runs on UP; DOWN under sanctioned block BLK-2026-0412" },
+  { id: "T7", number: "FT-903", name: "Rake placement CNB yard", type: "freight", corridorId: "C2", sectionId: "SEC-TDL-CNB", trackId: "TRK-TDL-CNB-DN", direction: "DOWN", start: "05:45", end: "06:30" },
 ];
 
 /** Blocks already sanctioned / pending — same IDs as the Network Schematic. */
 export const existingBlocks: ExistingBlock[] = [
-  { id: "E1", blockId: "BLK-2026-0412", corridorId: "C4", start: "01:30", end: "04:45", status: "approved", work: "Rail grinding RGM-04 (Engineering)" },
-  { id: "E2", blockId: "BLK-2026-0417", corridorId: "C2", start: "23:30", end: "03:00", status: "pending", work: "EI renewal & point machine overhaul (S&T)" },
-  { id: "E3", blockId: "BLK-2026-0423", corridorId: "C5", start: "02:00", end: "05:30", status: "approved", work: "OHE catenary renewal (TRD)" },
+  { id: "E1", blockId: "BLK-2026-0412", corridorId: "C4", sectionId: "SEC-GZB-ALJN", trackId: "TRK-GZB-ALJN-DN", direction: "DOWN", start: "01:30", end: "04:45", possessionStart: "01:30", possessionEnd: "04:45", status: "approved", work: "Rail grinding RGM-04 (Engineering)" },
+  { id: "E2", blockId: "BLK-2026-0417", corridorId: "C2", sectionId: "SEC-TDL-CNB", trackId: "TRK-TDL-CNB-DN", direction: "DOWN", start: "23:30", end: "03:00", possessionStart: "23:30", possessionEnd: "03:00", status: "pending", work: "EI renewal & point machine overhaul (S&T)" },
+  { id: "E3", blockId: "BLK-2026-0423", corridorId: "C5", sectionId: "SEC-DDU-BSB", trackId: "TRK-DDU-BSB-SL", direction: "BOTH", start: "02:00", end: "05:30", possessionStart: "02:00", possessionEnd: "05:30", status: "approved", work: "OHE catenary renewal (TRD)" },
 ];
 
 export const alerts: Alert[] = [

@@ -118,6 +118,8 @@ class MaintenanceJob(BaseModel):
     location: str
     corridor_id: str
     section_id: str = ""
+    track_id: str = ""
+    direction: Optional[str] = None
     severity: str = Field(
         default="",
         description="Raw source severity label, kept verbatim for the audit trail",
@@ -139,6 +141,11 @@ class MaintenanceJob(BaseModel):
     duration_minutes: Optional[int] = Field(default=None, ge=0)
     setup_duration_minutes: int = Field(default=0, ge=0)
     restore_duration_minutes: int = Field(default=0, ge=0)
+
+    @property
+    def total_possession_minutes(self) -> int:
+        """Total possession demand: setup + work + restore, never just work time."""
+        return (self.setup_duration_minutes or 0) + (self.duration_minutes or 0) + (self.restore_duration_minutes or 0)
 
     # Feature 12 — explicit possession phases ---------------------------------
     # duration_minutes is the WORK phase only. The total possession demand is
@@ -183,6 +190,9 @@ class TrainMovement(BaseModel):
     train_number: str = ""
     train_type: Literal["passenger", "freight", "special"]
     corridor_id: str
+    section_id: str = ""
+    track_id: str = ""
+    direction: Optional[str] = None
     protected: bool = Field(
         description="Protected paths must never be regulated or overlapped"
     )
@@ -201,14 +211,48 @@ class BlockWindow(BaseModel):
     window_id: str
     block_id: str = Field(default="", description="Sanctioned block number, e.g. BLK-2026-0423")
     corridor_id: str
+    section_id: str = ""
+    track_id: str = ""
+    direction: LineDirection = LineDirection.BOTH
     block_type: BlockType = BlockType.TRAFFIC
     status: Literal["proposed", "pending", "approved", "rejected", "locked"] = "proposed"
     start: Optional[datetime] = None
     end: Optional[datetime] = None
+    possession_start: Optional[datetime] = None
+    possession_end: Optional[datetime] = None
     duration_minutes: int = Field(ge=0, default=0)
     note: str = ""
+    job_ids: List[str] = Field(default_factory=list)
+    affected_train_ids: List[str] = Field(default_factory=list)
+    required_resources: List[str] = Field(default_factory=list)
+    isolation_requirements: List[str] = Field(default_factory=list)
     data_quality_status: DataQualityStatus = DataQualityStatus.READY
     data_quality_messages: List[ValidationMessage] = Field(default_factory=list)
+
+
+class Station(BaseModel):
+    """Canonical station node in the railway network."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    name: str
+    code: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    junction: bool = False
+
+
+class Track(BaseModel):
+    """Canonical physical track belonging to a section with explicit direction and line type."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    section_id: str
+    direction: LineDirection  # UP | DOWN | BOTH
+    line_type: LineConfiguration  # SINGLE | DOUBLE
+    status: Literal["clear", "occupied", "maintenance", "blocked", "caution"] = "clear"
 
 
 class Resource(BaseModel):
@@ -242,10 +286,7 @@ class Corridor(BaseModel):
 class Section(BaseModel):
     """Canonical physical section between two adjacent stations.
 
-    For double-line sections the two physical lines are represented through
-    ``lines`` plus the working/adjacent concept carried by jobs; whether the
-    adjacent line may keep carrying movement is a property of each block,
-    not an automatic guarantee.
+    Hierarchy: Network -> Section -> Track -> Block -> Jobs
     """
 
     model_config = ConfigDict(use_enum_values=True)
@@ -257,7 +298,125 @@ class Section(BaseModel):
     to_station_id: str
     line_configuration: LineConfiguration
     lines: List[LineDirection] = Field(default_factory=list)
+    tracks: List[Track] = Field(default_factory=list)
     operational_status: Literal["clear", "occupied", "blocked", "maintenance", "caution"] = "clear"
+
+
+class RailwayPath(BaseModel):
+    """Canonical route/path traversing one or more sections."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    name: str
+    section_ids: List[str] = Field(default_factory=list)
+    direction: LineDirection = LineDirection.BOTH
+
+
+# ---------------------------------------------------------------------------
+# Canonical Plan, Revisions, Assignments & Decisions
+# ---------------------------------------------------------------------------
+
+
+class BlockAssignment(BaseModel):
+    """Explicit block assignment produced by planner or officer modification."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    plan_revision_id: str = ""
+    block_id: str
+    section_id: str
+    track_id: str
+    direction: LineDirection = LineDirection.BOTH
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    possession_start: Optional[datetime] = None
+    possession_end: Optional[datetime] = None
+    block_type: BlockType = BlockType.TRAFFIC
+    job_ids: List[str] = Field(default_factory=list)
+    execution_mode: str = "SEQUENTIAL"
+    status: str = "PLANNED"
+
+
+class PlanDecision(BaseModel):
+    """Auditable officer decision on a plan revision."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    plan_id: str
+    plan_revision_id: str
+    action: Literal["APPROVE", "MODIFY", "REJECT", "LOCK"]
+    officer: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(datetime.now().astimezone().tzinfo))
+    reason: str = ""
+    affected_jobs: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanRevision(BaseModel):
+    """Immutable plan revision within a plan's lifecycle."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    plan_id: str
+    revision_number: int
+    based_on_revision_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(datetime.now().astimezone().tzinfo))
+    created_by: str = "planner"
+    reason: str = "Initial plan generation"
+    status: Literal["DRAFT", "PENDING_APPROVAL", "APPROVED", "MODIFIED", "REJECTED", "LOCKED", "STALE", "INFEASIBLE"] = "PENDING_APPROVAL"
+    assignments: List[BlockAssignment] = Field(default_factory=list)
+    deferred_jobs: List[Dict[str, Any]] = Field(default_factory=list)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    raw_plan_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class Plan(BaseModel):
+    """Canonical Plan entity over a planning horizon with multiple revisions."""
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    horizon: str
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+    status: str = "PENDING_APPROVAL"
+    current_revision_id: str = ""
+    revisions: List[PlanRevision] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Simulation Schemas (Section 18)
+# ---------------------------------------------------------------------------
+
+
+class SimulationEvent(BaseModel):
+    """Structured simulation event payload."""
+
+    type: str  # SPECIAL_TRAIN | REDUCE_BLOCK_WINDOW | REMOVE_BLOCK | EMERGENCY_JOB | RESOURCE_UNAVAILABLE | PRIORITY_CHANGE | DEADLINE_CHANGE | OPERATIONAL_RESTRICTION
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SimulationRequest(BaseModel):
+    """Request envelope for POST /api/plans/{plan_id}/simulate."""
+
+    block_id: str
+    event: SimulationEvent
+
+
+class SimulationResponse(BaseModel):
+    """Response envelope for POST /api/plans/{plan_id}/simulate."""
+
+    status: str  # FEASIBLE | INFEASIBLE
+    baseline: Dict[str, Any]
+    event: Dict[str, Any]
+    simulated: Dict[str, Any]
+    changes: List[Dict[str, Any]] = Field(default_factory=list)
+    reasons: List[str] = Field(default_factory=list)
+    alternatives: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

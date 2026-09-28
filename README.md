@@ -101,17 +101,21 @@ npm run dev
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | GET | `/api/health` | Ingestion snapshot + honest data-quality verdict |
-| GET | `/api/jobs` · `/api/trains` · `/api/blocks` · `/api/network` | Canonical world queries |
+| GET | `/api/plans` | Canonical plan list with complete immutable revision histories |
+| GET | `/api/plans/{id}` | Governed plan detail + active revision + audit decisions |
+| POST | `/api/plans/generate` | Canonical CP-SAT plan generation with structured track assignments |
+| POST | `/api/plans/{id}/simulate` | What-if simulation engine (variable blocks W1..W4; never mutates baseline) |
+| POST | `/api/plans/{id}/approve` · `/modify` · `/reject` · `/lock` | Officer-gated immutable governance lifecycle |
+| GET | `/api/jobs` · `/api/trains` · `/api/blocks` · `/api/network` | Canonical world queries with UP/DOWN track hierarchy |
 | POST | `/api/ingest` · `/api/validate` | Ingestion & validation with per-record messages |
 | GET | `/api/jobs/{id}/block-compatibility` · `/related` · `/possession` | Rule-engine queries |
-| GET | `/api/coordination` · `/api/reason-codes` | Compatibility verdicts & reason-code catalogue |
-| **POST** | **`/api/planner/run`** | **Real CP-SAT plan** (`mode`: SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST); stores `PLAN-r1` |
-| **POST** | **`/api/planner/alternatives`** | **Feature 18** — the same world solved under all three weight profiles (factual comparison, no winner declared) |
-| **POST** | **`/api/replan`** | **Event-driven replan** (SPECIAL_TRAIN, TRAIN_CANCELLED, RESOURCE_FAILURE, EMERGENCY_JOB, WINDOW_REDUCED, WINDOW_WITHDRAWN, PRIORITY_CHANGE, OPERATIONAL_RESTRICTION) → r2, r3, … with before/after diffs |
+| GET | `/api/coordination` · `/api/reason-codes` | Compatibility verdicts & deterministic reason-code catalogue |
+| **POST** | **`/api/planner/run`** | **Real CP-SAT plan** (`mode`: SAFETY_FIRST / BALANCED / PUNCTUALITY_FIRST); stores active revision |
+| **POST** | **`/api/planner/alternatives`** | Factual comparison across multiple objective profiles |
+| **POST** | **`/api/replan`** | **Event-driven replan** (SPECIAL_TRAIN, EMERGENCY_JOB, WINDOW_REDUCED, etc.) |
 | GET/POST | `/api/scenarios` · `/api/scenarios/run` | Seeded scenario worlds + runs: `normal`, `bundling`, `live_event`, `infeasible`, `mode_tradeoff` |
 | POST | `/api/evaluate` | Baseline comparison: EARLIEST_AVAILABLE vs GREEDY_PRIORITY vs CP_SAT on identical inputs |
-| POST | `/api/plans/{id}/approve` · `/modify` · `/reject` · `/lock` | Officer-gated governance lifecycle |
-| GET | `/api/plans/{id}` · `/api/plans/{id}/audit` · `/api/audit` | Governed plan + immutable audit trail |
+| GET | `/api/audit` · `/api/plans/{id}/audit` | Immutable audit trail of officer decisions |
 | POST | `/api/plans/{id}/staleness` | Snapshot-vs-world drift detection (STALE status) |
 
 Envelope `status` is the worst data-quality verdict across returned records (READY → REVIEW_REQUIRED → STALE → INVALID) — the malformed register rows in the seed data are flagged, never hidden.
@@ -128,19 +132,18 @@ npm run preview
 ## 🧪 Testing
 
 ```bash
-# Backend: 261 tests — unit coverage (adapters, canonical models, data quality,
+# Backend: 271 tests — unit coverage (adapters, canonical models, data quality,
 # rules, priority, optimizer, planner, replanning, scenarios, evaluation,
-# fairness, buffer, resources) + end-to-end API flow tests (test_e2e.py) that
-# pin the §46 invariants and the CP-SAT scheduling guarantees (genuine
-# parallelism for compatible jobs, conditional ordering, interval-exact
-# resource conflicts, locked assignments, cross-midnight intervals, weight-
-# sensitive objective modes) through the same endpoints the frontend calls.
+# fairness, buffer, resources, refactored architecture) + end-to-end API flow
+# tests (test_e2e.py) that pin CP-SAT scheduling guarantees, track hierarchy,
+# immutable revision locking, and variable block simulation.
 npm run test:backend
 # or
-python -m pytest backend/app/tests -q
+py -m pytest backend/app/tests || python -m pytest backend/app/tests
 
-# Frontend: 24 Vitest unit tests (circular-clock time arithmetic, planner
-# payload normalisation, canonical↔seed id bridge) + typecheck + production build
+# Frontend: 67 Vitest unit & architectural consistency tests across 8 test suites
+# (single authoritative ISO deadlines, track & section hierarchy, setup/work/restore
+# possession breakdown, circular midnight crossing, officer terminology, variable block simulation).
 npm run test:frontend
 # or
 npm run test --prefix frontend

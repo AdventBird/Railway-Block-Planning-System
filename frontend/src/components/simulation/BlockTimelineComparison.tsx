@@ -17,8 +17,8 @@ function BlockTimelineComparison({
   endMinute,
   beforeBars,
   afterBars,
-  beforeVersion = "Before (r3)",
-  afterVersion = "After (r4)",
+  beforeVersion = "Current Plan",
+  afterVersion = "Simulated Plan",
 }: BlockTimelineComparisonProps) {
   const totalMinutes = Math.max(60, endMinute - startMinute);
 

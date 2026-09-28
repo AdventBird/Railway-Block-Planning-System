@@ -12,13 +12,45 @@ export interface Job {
   dept: Dept;
   source: SourceSystem;
   corridorId: string;
+  sectionId: string;
+  trackId: string;
+  direction: "UP" | "DOWN" | "BOTH";
   asset: string;
-  minutes: number;
-  deadline: string;
+  minutes: number; // Work duration in minutes
+  setupMinutes: number; // Setup duration
+  restoreMinutes: number; // Restore duration
+  deadline: string; // Authoritative ISO 8601 string, e.g. "2026-09-15T05:45:00+05:30"
   tier: 0 | 1 | 2 | 3 | 4;
   tierReason: string;
   resources: string[];
   needsPowerIsolation?: boolean;
+  status: "OPEN" | "ACKNOWLEDGED" | "IN_PROGRESS" | "CLOSED";
+  plannedDate?: string;
+}
+
+export const REFERENCE_DATE = "2026-09-14T18:00:00+05:30";
+
+export function isJobOverdue(deadlineIso: string, ref = REFERENCE_DATE): boolean {
+  if (!deadlineIso) return false;
+  return new Date(deadlineIso).getTime() < new Date(ref).getTime();
+}
+
+export function formatJobDeadline(deadlineIso: string): string {
+  if (!deadlineIso) return "";
+  const d = new Date(deadlineIso);
+  if (isNaN(d.getTime())) return deadlineIso;
+  const day = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" });
+  const hours = d.getHours();
+  const mins = d.getMinutes();
+  if (hours !== 0 || mins !== 0) {
+    const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" });
+    return `${day} ${time}`;
+  }
+  return day;
+}
+
+export function totalPossessionMinutes(job: Job): number {
+  return (job.setupMinutes || 0) + (job.minutes || 0) + (job.restoreMinutes || 0);
 }
 
 export const jobs: Job[] = [
@@ -28,14 +60,21 @@ export const jobs: Job[] = [
     dept: "TRD",
     source: "TDMS",
     corridorId: "C5",
+    sectionId: "SEC-DDU-BSB",
+    trackId: "TRK-DDU-BSB-SL",
+    direction: "BOTH",
     asset: "OHE mast 74/12 + insulator assembly",
     minutes: 120,
-    deadline: "Before first traffic (05:45)",
+    setupMinutes: 20,
+    restoreMinutes: 15,
+    deadline: "2026-09-15T05:45:00+05:30",
     tier: 0,
     tierReason:
       "Mandatory safety — insulator shattered, OHE cannot be energized; section cannot carry traffic until replaced.",
     resources: ["Tower wagon TW-925", "OHE crew A", "Power isolation: DDU feed"],
     needsPowerIsolation: true,
+    status: "IN_PROGRESS",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-02",
@@ -43,13 +82,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "TMS",
     corridorId: "C1",
+    sectionId: "SEC-NDLS-GZB",
+    trackId: "TRK-NDLS-GZB-UP",
+    direction: "UP",
     asset: "UP rail KM 18/4 (52 kg / 90 UTS)",
     minutes: 90,
-    deadline: "Within 48 h (by 16 Sep 04:00)",
+    setupMinutes: 15,
+    restoreMinutes: 10,
+    deadline: "2026-09-16T04:00:00+05:30",
     tier: 1,
     tierReason:
       "USFD-detected fracture; 30 km/h caution imposed — weld must restore full speed before the morning Rajdhani path.",
     resources: ["REMM-2 welding set", "P-Way welding party"],
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-03",
@@ -57,13 +103,20 @@ export const jobs: Job[] = [
     dept: "S&T",
     source: "SMMS",
     corridorId: "C2",
+    sectionId: "SEC-TDL-CNB",
+    trackId: "TRK-TDL-CNB-UP",
+    direction: "UP",
     asset: "EI panel PMC-7 at Tundla",
     minutes: 60,
-    deadline: "Immediate",
+    setupMinutes: 10,
+    restoreMinutes: 10,
+    deadline: "2026-09-15T02:00:00+05:30",
     tier: 1,
     tierReason:
       "Point operation failing intermittently — signals worked at caution; S&T failure team on standby at site.",
     resources: ["S&T failure team", "Panel spare modules"],
+    status: "ACKNOWLEDGED",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-04",
@@ -71,13 +124,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "TMS",
     corridorId: "C2",
+    sectionId: "SEC-TDL-CNB",
+    trackId: "TRK-TDL-CNB-DN",
+    direction: "DOWN",
     asset: "DOWN track KM 121/8–125/2",
     minutes: 240,
-    deadline: "Overdue (due 12 Sep)",
+    setupMinutes: 30,
+    restoreMinutes: 20,
+    deadline: "2026-09-12T00:00:00+05:30",
     tier: 2,
     tierReason:
       "Overdue 2 days — track geometry deteriorating; 40 km/h TSR at risk of being tightened if not worked this week.",
     resources: ["BCM-03", "Ballast regulator", "BRNA men"],
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-05",
@@ -85,14 +145,21 @@ export const jobs: Job[] = [
     dept: "TRD",
     source: "TDMS",
     corridorId: "C3",
+    sectionId: "SEC-PRYJ-DDU",
+    trackId: "TRK-PRYJ-DDU-UP",
+    direction: "UP",
     asset: "Regulation anchor KM 88/6",
     minutes: 90,
-    deadline: "Overdue (due 10 Sep)",
+    setupMinutes: 15,
+    restoreMinutes: 10,
+    deadline: "2026-09-10T00:00:00+05:30",
     tier: 2,
     tierReason:
       "Overdue — tension outside limits; accelerating pantograph wear and dewirement risk in high wind.",
     resources: ["Tower wagon TW-925", "OHE crew B"],
     needsPowerIsolation: true,
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-06",
@@ -100,13 +167,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "BDMS",
     corridorId: "C3",
+    sectionId: "SEC-PRYJ-DDU",
+    trackId: "TRK-PRYJ-DDU-DN",
+    direction: "DOWN",
     asset: "Bridge No. 41 (2 × 12.2 m girders)",
     minutes: 120,
-    deadline: "30 Sep",
+    setupMinutes: 20,
+    restoreMinutes: 15,
+    deadline: "2026-09-30T00:00:00+05:30",
     tier: 3,
     tierReason:
       "Post-monsoon mandatory inspection cycle (once in 90 days) — needs REMM access crane under traffic block.",
     resources: ["REMM access crane", "Bridge inspection party"],
+    status: "OPEN",
+    plannedDate: "17 Sep",
   },
   {
     id: "J-07",
@@ -114,13 +188,20 @@ export const jobs: Job[] = [
     dept: "S&T",
     source: "SMMS",
     corridorId: "C3",
+    sectionId: "SEC-PRYJ-DDU",
+    trackId: "TRK-PRYJ-DDU-UP",
+    direction: "UP",
     asset: "PRYJ–block section (DC axle counters)",
     minutes: 180,
-    deadline: "22 Sep",
+    setupMinutes: 15,
+    restoreMinutes: 30,
+    deadline: "2026-09-22T00:00:00+05:30",
     tier: 3,
     tierReason:
       "Ageing DC axle counters — 3 failures this month; EERC renewal removes adjustment-related failures.",
     resources: ["S&T EERC team", "Spinner tester"],
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-08",
@@ -128,13 +209,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "TMS",
     corridorId: "C4",
+    sectionId: "SEC-GZB-ALJN",
+    trackId: "TRK-GZB-ALJN-DN",
+    direction: "DOWN",
     asset: "UP + DOWN KM 32–38",
     minutes: 240,
-    deadline: "20 Sep",
+    setupMinutes: 30,
+    restoreMinutes: 20,
+    deadline: "2026-09-20T00:00:00+05:30",
     tier: 3,
     tierReason:
       "Leveling required after RGM-04 grinding pass; TCP machine out of POH until 17 Sep.",
     resources: ["TCP tamping machine", "Geometry car"],
+    status: "OPEN",
+    plannedDate: "18 Sep",
   },
   {
     id: "J-09",
@@ -142,13 +230,20 @@ export const jobs: Job[] = [
     dept: "S&T",
     source: "SMMS",
     corridorId: "C1",
+    sectionId: "SEC-NDLS-GZB",
+    trackId: "TRK-NDLS-GZB-UP",
+    direction: "UP",
     asset: "Signals S/12 · S/18 · S/24",
     minutes: 60,
-    deadline: "30 Sep",
+    setupMinutes: 10,
+    restoreMinutes: 10,
+    deadline: "2026-09-30T00:00:00+05:30",
     tier: 4,
     tierReason:
       "Routine — lamps at 85% of life; batch replacement cuts night-time failure call-outs.",
     resources: ["S&T lamp party"],
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
   {
     id: "J-10",
@@ -156,12 +251,19 @@ export const jobs: Job[] = [
     dept: "TRD",
     source: "TDMS",
     corridorId: "C1",
+    sectionId: "SEC-NDLS-GZB",
+    trackId: "TRK-NDLS-GZB-DN",
+    direction: "DOWN",
     asset: "Masts 14–31",
     minutes: 90,
-    deadline: "05 Oct",
+    setupMinutes: 10,
+    restoreMinutes: 10,
+    deadline: "2026-10-05T00:00:00+05:30",
     tier: 4,
     tierReason: "Routine preventive cycle — no functional degradation reported.",
     resources: ["OHE line party"],
+    status: "OPEN",
+    plannedDate: "05 Oct",
   },
   {
     id: "J-11",
@@ -169,13 +271,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "TMS",
     corridorId: "C3",
+    sectionId: "SEC-PRYJ-DDU",
+    trackId: "TRK-PRYJ-DDU-UP",
+    direction: "UP",
     asset: "KM 95–99 cuttings",
     minutes: 120,
-    deadline: "30 Sep",
+    setupMinutes: 15,
+    restoreMinutes: 15,
+    deadline: "2026-09-30T00:00:00+05:30",
     tier: 4,
     tierReason:
       "Routine — monsoon growth; curve sighting at KM 97 acceptable but tightening.",
     resources: ["VGR party", "Chainsaw kit"],
+    status: "OPEN",
+    plannedDate: "20 Sep",
   },
   {
     id: "J-12",
@@ -183,12 +292,19 @@ export const jobs: Job[] = [
     dept: "S&T",
     source: "SMMS",
     corridorId: "C2",
+    sectionId: "SEC-TDL-CNB",
+    trackId: "TRK-TDL-CNB-DN",
+    direction: "DOWN",
     asset: "CNB yard cable ducts",
     minutes: 90,
-    deadline: "08 Oct",
+    setupMinutes: 15,
+    restoreMinutes: 15,
+    deadline: "2026-10-08T00:00:00+05:30",
     tier: 4,
     tierReason: "Routine 6-monthly inspection; no open defects on the route.",
     resources: ["S&T cable party"],
+    status: "OPEN",
+    plannedDate: "16 Sep",
   },
   {
     id: "J-13",
@@ -196,13 +312,20 @@ export const jobs: Job[] = [
     dept: "Engineering",
     source: "TMS",
     corridorId: "C1",
+    sectionId: "SEC-NDLS-GZB",
+    trackId: "TRK-NDLS-GZB-UP",
+    direction: "UP",
     asset: "KM 10–24 track & trolley refuges",
     minutes: 45,
-    deadline: "19 Sep",
+    setupMinutes: 10,
+    restoreMinutes: 5,
+    deadline: "2026-09-19T00:00:00+05:30",
     tier: 4,
     tierReason:
       "Routine weekly line-side patrol — trolley and packset only, no machines; rides any spare capacity in the W1 window.",
     resources: ["Motor trolley T-12", "Patrol party (2)"],
+    status: "OPEN",
+    plannedDate: "15 Sep",
   },
 ];
 

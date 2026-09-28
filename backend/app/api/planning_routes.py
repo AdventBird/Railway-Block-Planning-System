@@ -232,7 +232,7 @@ def block_clearance(request: Request, body: BlockClearanceRequest) -> ApiEnvelop
 
 
 class GovernanceActionRequest(BaseModel):
-    action: str  # APPROVE | MODIFY | REJECT | LOCK
+    action: str = ""  # APPROVE | MODIFY | REJECT | LOCK
     officer: str
     reason: str = ""
     affected_jobs: List[str] = Field(default_factory=list)
@@ -277,6 +277,144 @@ def _govern(plan_id: str, action: str, body: GovernanceActionRequest) -> ApiEnve
     except ValueError as exc:
         return _error("TRANSITION_INVALID", str(exc))
     return _envelope("READY", result)
+
+
+@router.get("/plans", response_model=ApiEnvelope)
+def list_plans() -> ApiEnvelope:
+    """List all stored plans and their revision history."""
+    store = get_plan_store()
+    plans = store.list_plans()
+    if not plans:
+        run_plan(store=True)
+        plans = store.list_plans()
+    return _envelope("READY", {"plans": plans, "count": len(plans)})
+
+
+@router.post("/plans/generate", response_model=ApiEnvelope)
+def plans_generate(request: Request, body: PlannerRunRequest | None = None) -> ApiEnvelope:
+    """Canonical alias for generating a plan revision via CP-SAT planner."""
+    return planner_run(request, body)
+
+
+class PlanSimulateRequest(BaseModel):
+    block_id: str = "W1"
+    event: Dict[str, Any]
+
+
+@router.post("/plans/{plan_id}/simulate", response_model=ApiEnvelope)
+def plan_simulate(plan_id: str, body: PlanSimulateRequest) -> ApiEnvelope:
+    """Run hypothetical simulation on an existing plan without mutating the active plan."""
+    from backend.app.services.replanning import EventType
+
+    store = get_plan_store()
+    stored = store.get_plan(plan_id)
+    if stored is None:
+        stored = store.get_plan_or_default()
+    if stored is None:
+        run_plan(store=True)
+        stored = store.get_plan_or_default()
+
+    baseline_plan = stored["plan"] if stored else {}
+
+    raw_event_type = str(body.event.get("type") or "").strip().upper()
+    event_mapping = {
+        "SPECIAL_TRAIN": "SPECIAL_TRAIN",
+        "REDUCE_WINDOW": "WINDOW_REDUCED",
+        "REDUCE_BLOCK_WINDOW": "WINDOW_REDUCED",
+        "WINDOW_REDUCED": "WINDOW_REDUCED",
+        "REMOVE_BLOCK": "WINDOW_WITHDRAWN",
+        "WINDOW_WITHDRAWN": "WINDOW_WITHDRAWN",
+        "EMERGENCY_JOB": "EMERGENCY_JOB",
+        "RESOURCE_UNAVAILABLE": "RESOURCE_FAILURE",
+        "RESOURCE_FAILURE": "RESOURCE_FAILURE",
+        "PRIORITY_CHANGE": "PRIORITY_CHANGE",
+        "OPERATIONAL_RESTRICTION": "OPERATIONAL_RESTRICTION",
+    }
+    canonical_event_type = event_mapping.get(raw_event_type, raw_event_type)
+    if canonical_event_type not in EventType.__members__:
+        return _error(
+            "UNKNOWN_EVENT_TYPE",
+            f"Unknown event type '{raw_event_type}'. Valid types: {', '.join(EventType.__members__)}.",
+        )
+
+    event_payload = dict(body.event.get("parameters") or body.event.get("payload") or {})
+    event_payload["block_id"] = body.block_id
+    if canonical_event_type == "WINDOW_REDUCED" and "windowId" not in event_payload:
+        event_payload["windowId"] = body.block_id
+        if "minutes" not in event_payload:
+            event_payload["minutes"] = 60
+    if canonical_event_type == "WINDOW_WITHDRAWN" and "windowId" not in event_payload:
+        event_payload["windowId"] = body.block_id
+    if canonical_event_type == "SPECIAL_TRAIN" and "train" not in event_payload:
+        event_payload["train"] = {
+            "id": event_payload.get("trainId", "00214"),
+            "number": event_payload.get("trainNumber", "00214"),
+            "start": event_payload.get("timeStart", "02:30"),
+            "end": event_payload.get("timeEnd", "03:30"),
+            "isProtected": True,
+            "corridorId": event_payload.get("corridorId", "C1"),
+        }
+
+    sim_event = {
+        "type": canonical_event_type,
+        "payload": event_payload,
+    }
+
+    try:
+        replan_result = run_replan(
+            current_plan=baseline_plan,
+            event=sim_event,
+            store=False,
+        )
+    except Exception as exc:
+        return _error("SIMULATION_FAILED", f"Simulation failed: {exc}")
+
+    status = "FEASIBLE" if replan_result.get("status") in ("OPTIMAL", "FEASIBLE") else "INFEASIBLE"
+
+    changes = []
+    for item in replan_result.get("changed_assignments", []):
+        changes.append({
+            "type": "MOVED",
+            "job_id": item.get("job_id"),
+            "window": item.get("window"),
+            "start": item.get("start"),
+            "end": item.get("end"),
+        })
+    for item in replan_result.get("newly_deferred_jobs", []):
+        changes.append({
+            "type": "DEFERRED",
+            "job_id": item.get("job_id"),
+            "reason": item.get("reason", "Displaced by operational event"),
+        })
+    for item in replan_result.get("newly_scheduled_jobs", []):
+        changes.append({
+            "type": "SCHEDULED",
+            "job_id": item.get("job_id"),
+            "window": item.get("window"),
+        })
+
+    alternatives = [
+        {"mode": "BALANCED", "description": "Balanced compromise between safety and punctuality"},
+        {"mode": "SAFETY_FIRST", "description": "Prioritise critical maintenance; accept higher passenger delay"},
+        {"mode": "PUNCTUALITY_FIRST", "description": "Protect train paths; defer non-urgent maintenance"},
+    ]
+
+    response_payload = {
+        "status": status,
+        "block_id": body.block_id,
+        "baseline": baseline_plan,
+        "event": {
+            "type": canonical_event_type,
+            "parameters": event_payload,
+        },
+        "simulated": replan_result,
+        "changes": changes,
+        "reasons": replan_result.get("reason_codes", []),
+        "alternatives": alternatives,
+        "metrics": replan_result.get("metrics", {}),
+    }
+
+    return _envelope("READY", response_payload)
 
 
 @router.get("/plans/{plan_id}", response_model=ApiEnvelope)

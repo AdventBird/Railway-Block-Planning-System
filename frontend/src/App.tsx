@@ -94,13 +94,12 @@ export default function App() {
   }, []);
 
   // Auth gate — landing / sign-in until an officer is signed in.
-  // (Placed before any dependent callbacks so `officer` is narrowed below.)
   if (!officer) {
     return <Landing onSignedIn={setOfficer} />;
   }
 
   const handleAction = (action: "Approved" | "Modified" | "Rejected", reason: string) => {
-    const version = action === "Modified" || revisedNote ? "v2026.09.15 · r4" : PLAN_VERSION;
+    const version = action === "Modified" || revisedNote ? "Plan Revision (Modified)" : PLAN_VERSION;
     const ts = `${new Date().toLocaleDateString("en-GB")} · ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} IST`;
     const entry: DecisionEntry = {
       id: `D-${105 + decisions.length - seedDecisions.length}`,
@@ -126,11 +125,6 @@ export default function App() {
     setAssistantScenario(scenario);
     setAssistantOpen(true);
   };
-
-  // Auth gate — landing / sign-in until an officer is signed in.
-  if (!officer) {
-    return <Landing onSignedIn={setOfficer} />;
-  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f6f7fb] text-[#171a30]">

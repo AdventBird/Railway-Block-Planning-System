@@ -12,6 +12,7 @@ from __future__ import annotations
 import uvicorn
 
 from backend.app import config
+from backend.app.api.app import app
 
 
 def main() -> None:

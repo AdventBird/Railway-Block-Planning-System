@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 
 import { PLAN_VERSION } from "./opsData";
+import { jobs, formatJobDeadline, isJobOverdue } from "./jobsData";
 
 export type ReasonCode =
   | "INSUFFICIENT_WINDOW"
@@ -218,7 +219,7 @@ export interface WeekDay {
 
 export const weekPlan: WeekDay[] = [
   { day: "Mon", date: "14 Sep", blocks: 3, minutes: 615, util: 78, note: "Tonight — existing blocks 0412 / 0417 / 0423 in force" },
-  { day: "Tue", date: "15 Sep", blocks: 3, minutes: 705, util: 91, note: "Recommended plan r3 — 7 jobs across 3 corridors" },
+  { day: "Tue", date: "15 Sep", blocks: 3, minutes: 705, util: 91, note: "Current Plan — 7 jobs across 3 corridors" },
   { day: "Wed", date: "16 Sep", blocks: 2, minutes: 390, util: 74, note: "J-12 cable inspection; PRYJ yard isolation granted" },
   { day: "Thu", date: "17 Sep", blocks: 1, minutes: 180, util: 62, note: "J-06 bridge inspection — REMM crane back from POH" },
   { day: "Fri", date: "18 Sep", blocks: 2, minutes: 300, util: 70, note: "J-08 tamping (TCP machine returns 17 Sep)" },
@@ -237,7 +238,7 @@ export const monthSummary = {
   plannedMinutes: 8940,
   deferredCount: 9,
   deadlinesNear: [
-    "J-02 rail weld — due 16 Sep",
+    "J-02 rail weld — due 16 Sep 04:00",
     "J-05 OHE tension — overdue (10 Sep)",
     "J-04 ballast cleaning — overdue (12 Sep)",
   ],
@@ -260,21 +261,30 @@ export const conflictNext: Record<string, string> = {
   "J-13": "Wed 16 Sep — W1 rebuilt without the reserved movement",
 };
 
-/** Approaching deadlines as structured rows (Weekly/Monthly view). */
+/** Approaching deadlines as structured rows (Weekly/Monthly view) — strictly derived from authoritative jobs. */
 export const deadlines: { jobId: string; label: string; due: string; tier: number; overdue: boolean }[] = [
-  { jobId: "J-05", label: "OHE auto-tension adjustment", due: "10 Sep", tier: 2, overdue: true },
-  { jobId: "J-04", label: "Ballast cleaning — deep screening", due: "12 Sep", tier: 2, overdue: true },
-  { jobId: "J-02", label: "Rail fracture weld repair", due: "16 Sep", tier: 1, overdue: false },
-  { jobId: "J-03", label: "Tundla EI failure recovery", due: "Tonight", tier: 1, overdue: false },
-];
+  "J-05",
+  "J-04",
+  "J-02",
+  "J-03",
+].map((id) => {
+  const j = jobs.find((x) => x.id === id)!;
+  return {
+    jobId: j.id,
+    label: j.title,
+    due: formatJobDeadline(j.deadline),
+    tier: j.tier,
+    overdue: isJobOverdue(j.deadline),
+  };
+});
 
 /** Per-day planning detail — opened in the day drawer on click. */
 export const weekDetail: Record<
   string,
   { critical: number; alert: string; blocks: string[]; jobs: string[]; deferred: string[]; impact: string[]; resources: string[]; notes: string }
 > = {
-  "14 Sep": { critical: 3, alert: "BLK-0417 approval pending", blocks: ["BLK-2026-0412 · 01:30–04:45", "BLK-2026-0417 · 23:30–03:00", "BLK-2026-0423 · 02:00–05:30"], jobs: ["RGM-04 rail grinding", "EI renewal (S&T)", "OHE catenary renewal"], deferred: ["J-06 bridge inspection → 17 Sep"], impact: ["02612 special protected", "1 freight regulated"], resources: ["RGM-04", "Tower wagon TW-925", "S&T EI team"], notes: "Tonight — existing sanctioned blocks in force; plan r3 built for tomorrow night." },
-  "15 Sep": { critical: 2, alert: "Officer approval pending for r3", blocks: ["W1 · 01:00–04:00", "W2 · 01:30–05:30", "W3 · 01:30–06:15"], jobs: ["J-01 OHE insulator (T0)", "J-02 rail weld (T1)", "J-04 BCM (T2)", "J-05 tension (T2)", "J-07 axle counter (T3)", "J-13 trolley patrol (T4)", "J-09 lamps (T4)"], deferred: ["J-06 → 17 Sep", "J-10 → 05 Oct", "J-11 → 20 Sep", "J-12 → 16 Sep"], impact: ["3 minor regulations", "02612 path protected"], resources: ["BCM-03", "REMM-2", "TW-925", "OHE crews A+B"], notes: "Recommended plan r3 — 7 jobs across 3 corridors, 91% utilization." },
+  "14 Sep": { critical: 3, alert: "BLK-0417 approval pending", blocks: ["BLK-2026-0412 · 01:30–04:45", "BLK-2026-0417 · 23:30–03:00", "BLK-2026-0423 · 02:00–05:30"], jobs: ["RGM-04 rail grinding", "EI renewal (S&T)", "OHE catenary renewal"], deferred: ["J-06 bridge inspection → 17 Sep"], impact: ["02612 special protected", "1 freight regulated"], resources: ["RGM-04", "Tower wagon TW-925", "S&T EI team"], notes: "Tonight — existing sanctioned blocks in force; Current Plan built for tomorrow night." },
+  "15 Sep": { critical: 2, alert: "Officer approval pending for Current Plan", blocks: ["W1 · 01:00–04:00", "W2 · 01:30–05:30", "W3 · 01:30–06:15"], jobs: ["J-01 OHE insulator (T0)", "J-02 rail weld (T1)", "J-04 BCM (T2)", "J-05 tension (T2)", "J-07 axle counter (T3)", "J-13 trolley patrol (T4)", "J-09 lamps (T4)"], deferred: ["J-06 → 17 Sep", "J-10 → 05 Oct", "J-11 → 20 Sep", "J-12 → 16 Sep"], impact: ["3 minor regulations", "02612 path protected"], resources: ["BCM-03", "REMM-2", "TW-925", "OHE crews A+B"], notes: "Current Plan — 7 jobs across 3 corridors, 91% utilization." },
   "16 Sep": { critical: 1, alert: "J-02 weld deadline", blocks: ["W1 · 02:00–04:30", "W2 · 01:30–04:00"], jobs: ["J-12 cable inspection", "J-02 weld re-check"], deferred: ["J-04 balance pass"], impact: ["1 freight regulated"], resources: ["S&T cable party"], notes: "PRYJ yard isolation granted; J-12 re-planned away from BCM nights." },
   "17 Sep": { critical: 1, alert: "REMM crane back from POH", blocks: ["W1 · 01:00–04:00"], jobs: ["J-06 bridge bearing inspection"], deferred: [], impact: ["No regulations"], resources: ["REMM-2 + access crane"], notes: "Bridge inspection rescheduled from tonight." },
   "18 Sep": { critical: 0, alert: "TCP machine returns 17 Sep", blocks: ["W2 · 01:30–05:00", "W3 · 02:00–04:00"], jobs: ["J-08 tamping (curve CC 8+2)"], deferred: [], impact: ["1 freight held 10 min"], resources: ["TCP tamping machine"], notes: "First tamping slot after machine POH." },

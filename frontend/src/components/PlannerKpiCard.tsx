@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { OK, PRIMARY, WARN, CRIT, Tooltip } from "./ui";
-import { jobs } from "../data/jobsData";
+import { jobs, isJobOverdue } from "../data/jobsData";
 import { recommendedPlan, trainImpactValue } from "../data/planData";
 import type { PlannerMetrics, PlannerResult } from "../api/types";
 
@@ -390,7 +390,7 @@ export function buildQualityMetricsFromPlan(
 
   // Critical backlog: Tier 0-2 jobs with overdue deadlines in current queue
   const criticalOverdueCount = jobs.filter(
-    (j) => j.tier <= 2 && (j.deadline.startsWith("Overdue") || j.deadline.startsWith("Immediate"))
+    (j) => j.tier <= 2 && (isJobOverdue(j.deadline) || j.deadline.startsWith("Overdue") || j.deadline.startsWith("Immediate"))
   ).length;
 
   // Utilization: from metrics or default r3 (91%)

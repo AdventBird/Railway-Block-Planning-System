@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AlertCircle, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
 import { TierChip, Button } from "../ui";
+import { formatJobDeadline } from "../../data/jobsData";
 import {
   ALTERNATIVE_WINDOWS_MAP,
   type FeasibleAlternativeWindow,
@@ -145,7 +146,7 @@ export function ActionableDeferred({
 
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#878da1]">
                       <span>{j.dept} · {j.minutes} min</span>
-                      <span>Due: <strong className="text-[#171a30]">{j.deadline}</strong></span>
+                      <span>Due: <strong className="text-[#171a30]">{formatJobDeadline(j.deadline)}</strong></span>
                       {j.nextFeasibleDate && (
                         <span>Next feasible: <strong className="text-[#2e3092]">{j.nextFeasibleDate}</strong></span>
                       )}

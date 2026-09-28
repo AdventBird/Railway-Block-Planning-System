@@ -124,6 +124,23 @@ def run_plan(
     }
     out["mode"] = mode
 
+    # Structured block assignments
+    blocks_dict: Dict[str, Dict[str, Any]] = {}
+    for a in out.get("assignments", []):
+        wid = a.get("windowId") or a.get("block_id") or "W1"
+        if wid not in blocks_dict:
+            blocks_dict[wid] = {
+                "id": wid,
+                "block_id": wid,
+                "windowId": wid,
+                "start": a.get("start"),
+                "end": a.get("end"),
+                "corridor_id": a.get("corridorId"),
+                "job_ids": [],
+            }
+        blocks_dict[wid]["job_ids"].append(a.get("jobId"))
+    out["blocks"] = list(blocks_dict.values())
+
     if store:
         store_handle = get_plan_store()
         # Snapshot the FULL canonical job universe, not just the planner-

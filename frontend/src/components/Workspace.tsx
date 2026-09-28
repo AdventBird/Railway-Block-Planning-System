@@ -133,7 +133,7 @@ export function Workspace({ onNavigate, initialWindowId }: WorkspaceProps) {
   const [objectiveModalOpen, setObjectiveModalOpen] = useState(false);
 
   // Plan governance version
-  const [planVersion, setPlanVersion] = useState<string>("Plan r3");
+  const [planVersion, setPlanVersion] = useState<string>("Current Plan");
   const [planStatus, setPlanStatus] = useState<string>("Pending Approval");
 
   // Horizon jobs state (can be modified by applying candidate alternatives)

@@ -48,22 +48,22 @@ export interface SimJobDetail {
 export const CANONICAL_PLANS: PlanMeta[] = [
   {
     id: "r3",
-    version: "Plan r3",
-    name: "Plan r3 (17 Sep 2026)",
+    version: "Current Plan",
+    name: "Current Plan (17 Sep 2026)",
     date: "17 Sep 2026",
     status: "Pending approval",
   },
   {
     id: "r2",
-    version: "Plan r2",
-    name: "Plan r2 (16 Sep 2026)",
+    version: "Plan Revision 2",
+    name: "Plan Revision 2 (16 Sep 2026)",
     date: "16 Sep 2026",
     status: "Approved",
   },
   {
     id: "r1",
-    version: "Plan r1",
-    name: "Plan r1 (15 Sep 2026)",
+    version: "Plan Revision 1",
+    name: "Plan Revision 1 (15 Sep 2026)",
     date: "15 Sep 2026",
     status: "Historical",
   },
@@ -156,7 +156,7 @@ export const SIM_JOB_DATABASE: Record<string, SimJobDetail> = {
   "J-02": {
     id: "J-02",
     code: "J-02",
-    title: "Motor trolley weld repair",
+    title: "Rail fracture weld repair",
     dept: "Engineering",
     tier: 1,
     durationMinutes: 90,
@@ -176,7 +176,7 @@ export const SIM_JOB_DATABASE: Record<string, SimJobDetail> = {
   "J-04": {
     id: "J-04",
     code: "J-04",
-    title: "Ballast cleaning (BCM-0932)",
+    title: "Ballast cleaning (BCM) — deep screening",
     dept: "Engineering",
     tier: 2,
     durationMinutes: 240,
@@ -266,8 +266,8 @@ export const SIM_JOB_DATABASE: Record<string, SimJobDetail> = {
   "J-13": {
     id: "J-13",
     code: "J-13",
-    title: "OHE auto-tension & patrol",
-    dept: "TRD",
+    title: "Motor trolley & packset patrol",
+    dept: "Engineering",
     tier: 4,
     durationMinutes: 45,
     start: "03:00",

@@ -5,7 +5,7 @@
 import { Check, X } from "lucide-react";
 import { Drawer, Collapse, KV, Chip, TierChip, DeptChip, SourceChip, ReasonChip, CompatChip, REASON_META, PRIMARY, OK, CRIT, WARN, NEUTRAL } from "./ui";
 import type { ReactNode } from "react";
-import { jobById, jobOps, type Job, type CompatGroup } from "../data/jobsData";
+import { jobById, jobOps, formatJobDeadline, isJobOverdue, type Job, type CompatGroup } from "../data/jobsData";
 import { blockWindows, corridorLabel, existingBlocks, trains, type Alert } from "../data/opsData";
 import { recommendedPlan, conflictNext, weekDetail, type ConflictEntry } from "../data/planData";
 import type { AffectedTrain, DeferredJob } from "../api/planner";
@@ -32,7 +32,7 @@ export function JobDrawer({ job, onClose }: { job: Job; onClose: () => void }) {
   const ops = jobOps[job.id];
   const sched = recommendedPlan.assignments.find((a) => a.jobId === job.id);
   const def = recommendedPlan.deferred.find((d) => d.jobId === job.id);
-  const overdue = job.deadline.startsWith("Overdue") || job.deadline.startsWith("Immediate");
+  const overdue = isJobOverdue(job.deadline) || job.deadline.startsWith("Overdue") || job.deadline.startsWith("Immediate");
   return (
     <Drawer
       open
@@ -67,7 +67,7 @@ export function JobDrawer({ job, onClose }: { job: Job; onClose: () => void }) {
         </div>
         <div className="rounded-lg border border-[#e3e6f0] px-2 py-1.5 text-center">
           <div className={`font-mono text-[11px] font-extrabold leading-5 ${overdue ? "text-[#dc2626]" : "text-[#171a30]"}`}>
-            {ops?.due ?? "—"}
+            {formatJobDeadline(job.deadline) ?? ops?.due ?? "—"}
           </div>
           <div className="text-[9px] uppercase tracking-wider text-[#878da1]">due</div>
         </div>

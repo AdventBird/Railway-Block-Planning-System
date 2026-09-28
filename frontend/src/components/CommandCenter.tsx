@@ -235,10 +235,10 @@ export default function CommandCenter({
             </div>
 
             <div className="mt-2 text-3xl font-black tracking-tight text-[#171a30]">
-              Plan r3
+              Current Plan
             </div>
             <div className="mt-1 text-xs font-medium text-[#626982]">
-              17 Sep 2026 · Night maintenance plan
+              17 Sep 2026 · Night maintenance plan (Revision 3)
             </div>
 
             <div className="mt-5 flex items-center gap-8">

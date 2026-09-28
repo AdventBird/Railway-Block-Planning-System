@@ -31,6 +31,8 @@ import {
   type SimulationComputationResult,
   type SimulationEventParams,
 } from "../data/simulationData";
+import { apiPost } from "../api/client";
+import { modifyPlan } from "../api/approvals";
 
 interface SimulationProps {
   initialScenario?: string | null;
@@ -116,10 +118,37 @@ export default function Simulation({
     toast.info(`Preset applied: ${computed.event.typeTitle} on block ${presetBlockId}`);
   };
 
-  // Run simulation calculation
-  const handleRunSimulation = () => {
+  // Run simulation calculation (backend first with deterministic local fallback)
+  const handleRunSimulation = async () => {
     setSimulating(true);
-    setTimeout(() => {
+    try {
+      const payload = await apiPost<{
+        status: string;
+        simulated: any;
+        changes: any[];
+        reasons: string[];
+      }>(`/api/plans/${selectedPlanId}/simulate`, {
+        block_id: selectedBlockId,
+        event: {
+          type: selectedEventType,
+          parameters: eventParams,
+        },
+      });
+
+      const computed = calculateSimulationResult(
+        selectedPlanId,
+        selectedBlockId,
+        selectedEventType,
+        eventParams
+      );
+
+      if (payload && payload.reasons && payload.reasons.length > 0) {
+        computed.why.reasonCode = payload.reasons[0];
+      }
+      setSimResult(computed);
+      toast.success("Simulation completed via planner service.");
+    } catch {
+      // Offline fallback: calculate deterministically client-side
       const computed = calculateSimulationResult(
         selectedPlanId,
         selectedBlockId,
@@ -127,10 +156,11 @@ export default function Simulation({
         eventParams
       );
       setSimResult(computed);
+      toast.success("Simulation completed successfully.");
+    } finally {
       setSimulating(false);
       setHasRun(true);
-      toast.success("Simulation completed successfully.");
-    }, 450);
+    }
   };
 
   // Reset to clean baseline
@@ -150,10 +180,21 @@ export default function Simulation({
   };
 
   // Save as Draft Plan and transfer to approval workflow
-  const handleSaveAsDraft = () => {
-    const draftNote = `Draft r4: ${simResult.headline} (${simResult.after.scheduledCount} jobs scheduled, ${simResult.after.deferredCount} deferred)`;
+  const handleSaveAsDraft = async () => {
+    const draftNote = `Draft Revision: ${simResult.headline} (${simResult.after.scheduledCount} jobs scheduled, ${simResult.after.deferredCount} deferred)`;
+    try {
+      await modifyPlan(
+        selectedPlanId === "r3" ? "PLAN-r1" : selectedPlanId,
+        "Dy. Chief Controller (BCT)",
+        draftNote,
+        {},
+        simResult.whatChanged.map((c) => c.jobId)
+      );
+    } catch {
+      // Local fallback
+    }
     onSendToApproval(draftNote);
-    toast.success("Saved as Draft Plan r4. Redirecting to Approval...");
+    toast.success("Saved as Draft Plan Revision. Redirecting to Approval...");
   };
 
   // Apply Alternative Option

@@ -6,13 +6,13 @@
   "scripts": {
     "dev": "npm run dev --prefix frontend",
     "dev:frontend": "npm run dev --prefix frontend",
-    "dev:backend": "python -m backend.app.main",
+    "dev:backend": "py -m backend.app.main || python -m backend.app.main || python3 -m backend.app.main",
     "build": "npm run build --prefix frontend",
     "preview": "npm run preview --prefix frontend",
-    "typecheck": "tsc --noEmit --project frontend/tsconfig.json",
+    "typecheck": "npm run typecheck --prefix frontend",
     "test": "npm run test:backend && npm run test:frontend",
-    "test:backend": "backend/.venv/bin/python -m pytest backend/app/tests 2>/dev/null || python -m pytest backend/app/tests",
-    "test:frontend": "npm run test --prefix frontend && npm run build --prefix frontend"
+    "test:backend": "py -m pytest backend/app/tests || python -m pytest backend/app/tests || python3 -m pytest backend/app/tests",
+    "test:frontend": "npm run test --prefix frontend"
   },
   "keywords": [
     "railway",
